@@ -5,13 +5,16 @@ Tufty 2350 (RP2350B, 320x240 LCD, five buttons).
 
 Caution! This repo is a fun side project and I make no guarantees about performance or stability. These are working great on my hardware, but flash at your own risk!
 
+**To put the carts on your badge, follow [docs/DEPLOY.md](docs/DEPLOY.md).**
+Back up your badge first: its Supabase firmware is not part of this repo.
+
 The carts come from [snouty-badge](https://github.com/antithesishq/snouty-badge),
 which is a git submodule here. This repo adds a small Zig "Tufty OS" that
 speaks the SYCL badge's cart ABI. The same RP2350-family cart builds
 therefore run on core 1 with the Tufty's screen and buttons.
 
 * [PLAN.md](PLAN.md): the approach and the milestones
-* [docs/DEPLOY.md](docs/DEPLOY.md): back up the badge, flash, restore
+* [docs/DEPLOY.md](docs/DEPLOY.md): **start here**: back up your badge, build, install (dual boot beside Supabase, arcade only, or Genesis), controls, restore
 * [docs/ARCADE.md](docs/ARCADE.md): the arcade UF2 (every cart behind a
   boot menu), how to add a cart, the flash budget
 * [docs/DUALBOOT.md](docs/DUALBOOT.md): the arcade as a dual boot beside the
@@ -21,7 +24,7 @@ therefore run on core 1 with the Tufty's screen and buttons.
 * [docs/CARTS.md](docs/CARTS.md): Tufty-only cart changes (the submodule's `tufty` branch)
 
 ```sh
-git clone --recursive <this repo>
+git clone --recursive https://github.com/antithesishq/snouty-badge-tufty
 zig build            # zig-out/firmware/*.uf2
 zig build test       # host unit tests
 zig build menu-png   # docs/arcade-menu.png, the menu as the panel shows it

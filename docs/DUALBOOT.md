@@ -1,5 +1,9 @@
 # Dual boot: Snouty Arcade beside the Supabase badge firmware
 
+**Status:** verified on a real Supabase Select badge on 2026-10-02: the
+launcher app starts the arcade, and SUPABASE BADGE returns to MicroPython.
+Install steps for users are in [DEPLOY.md](DEPLOY.md) section 3A.
+
 `zig-out/firmware/snouty-tufty-arcade-supabase.uf2` puts the Snouty Arcade
 on the badge *next to* Supabase's MicroPython firmware instead of replacing
 it. MicroPython stays the firmware the badge boots. A Badgeware app,
