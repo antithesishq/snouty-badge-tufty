@@ -43,13 +43,15 @@ const MicroBuild = microzig.MicroBuild(.{
 /// controls_map.for_cart(name). The order here is the arcade menu order;
 /// every row is in snouty-tufty-arcade.uf2 (docs/ARCADE.md).
 /// `reflections_variant`: the monorepo's -Dreflections_variant for that cart
-/// (null: the option is not passed).
+/// (null: the option is not passed). `maze_size`: the monorepo's
+/// -Dmaze_size for snouty-maze (null: its default, 12).
 const Cart = struct {
     name: []const u8,
     binary: []const u8,
     scale: Scale = .fit,
     title: ?[]const u8 = null,
     reflections_variant: ?[]const u8 = null,
+    maze_size: ?u8 = null,
 };
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
@@ -58,6 +60,9 @@ const carts = [_]Cart{
     // Crop: an exact 2x keeps the dither cells regular and the spheres round.
     // full15 = the full scene at 15 fps; the carts stay unmodified (docs/ports/snouty-reflections.md).
     .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "full15" },
+    // 16x16 (the cart's maximum): 15.3 ms worst modelled at 150 MHz, ~9.2 ms
+    // at 250 MHz (docs/ports/snouty-maze.md).
+    .{ .name = "snouty-maze", .binary = "snouty-maze", .maze_size = 16 },
 };
 
 const Scale = enum { fit, crop, native };
@@ -69,6 +74,7 @@ const blurbs = [_][2][]const u8{
     .{ "demosnout", "A SKIP  B HOLD  C PARTS" },
     .{ "snoutenstein", "A/B TURN  UP/DN WALK  C FIRE" },
     .{ "snouty-reflections", "A/B ORBIT  UP/DN HIGH  C FREEZE" },
+    .{ "snouty-maze", "A/B TURN  UP/DN STEP  C SKIP" },
 };
 
 /// Arcade flash budget: every firmware image must end below this address.
@@ -179,6 +185,8 @@ fn add_hello(
 fn cart_bin(b: *Build, cart: Cart, inspect: bool) Build.LazyPath {
     const badge = if (cart.reflections_variant) |v|
         b.dependency("snouty_badge", .{ .cart = cart.name, .reflections_variant = v })
+    else if (cart.maze_size) |n|
+        b.dependency("snouty_badge", .{ .cart = cart.name, .maze_size = n })
     else
         b.dependency("snouty_badge", .{ .cart = cart.name });
     const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));

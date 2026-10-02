@@ -289,12 +289,31 @@ pub const snouty_reflections: Map = .{
     },
 };
 
+/// snouty-maze (docs/ports/snouty-maze.md): the split d-pad. A/B pivot
+/// left/right (edges), UP/DOWN step forward/back (edges, held repeats); any
+/// of them takes the camera over from the autopilot. C carries the cart's
+/// two screensaver buttons as tap/hold: a tap (released within 400 ms)
+/// pulses A = skip to the finish sequence, a hold (600 ms) sets Start =
+/// toggle the name strip, once per hold. No chords, so the direction
+/// buttons are never delayed or masked. B, Select (a no-op LED flag in
+/// release builds) and click are never sent.
+pub const snouty_maze: Map = .{
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.up), .held = bit(.up) },
+        .{ .on = btn(.down), .held = bit(.down) },
+        .{ .on = btn(.c), .tap = bit(.a), .hold = bit(.start), .tap_ms = 400, .hold_ms = 600 },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-run")) return &snouty_run;
     if (std.mem.eql(u8, name, "demosnout")) return &demosnout;
     if (std.mem.eql(u8, name, "snoutenstein")) return &snoutenstein;
     if (std.mem.eql(u8, name, "snouty-reflections")) return &snouty_reflections;
+    if (std.mem.eql(u8, name, "snouty-maze")) return &snouty_maze;
     return &default;
 }
 
@@ -706,6 +725,90 @@ test "reflections: START and click are never sent" {
     c.run(0, 100);
     try testing.expectEqual(@as(u32, 0), c.held_of(.start));
     try testing.expectEqual(@as(u32, 0), c.held_of(.click));
+}
+
+test "snouty-maze: direction buttons are direct, at once" {
+    try testing.expectEqual(&snouty_maze, for_cart("snouty-maze"));
+    const cases = [_]struct { Button, u16 }{
+        .{ .a, bit(.left) },
+        .{ .b, bit(.right) },
+        .{ .up, bit(.up) },
+        .{ .down, bit(.down) },
+    };
+    for (cases) |c| {
+        var s: Sim = .{ .m = .init(&snouty_maze) };
+        try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+    }
+}
+
+test "snouty-maze: C tap skips, C hold toggles the name strip once" {
+    // Tap, 100 ms: nothing while held, then A for 2 presents, never start.
+    var s: Sim = .{ .m = .init(&snouty_maze) };
+    for (0..6) |_| try testing.expectEqual(@as(u16, 0), s.step(btn(.c), 16));
+    try testing.expectEqual(bit(.a), s.step(0, 16));
+    try testing.expectEqual(bit(.a), s.step(0, 16));
+    try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+
+    // Hold, 1 s: start from 600 ms until release (one rising edge, so one
+    // toggle in the cart), no A on release.
+    var h: Sim = .{ .m = .init(&snouty_maze) };
+    var rises: u32 = 0;
+    var prev: u16 = 0;
+    for (0..62) |i| {
+        const out = h.step(btn(.c), 16);
+        try testing.expectEqual(@as(u16, 0), out & bit(.a));
+        if (i < 36) try testing.expectEqual(@as(u16, 0), out);
+        if (out & bit(.start) != 0 and prev & bit(.start) == 0) rises += 1;
+        prev = out;
+    }
+    try testing.expectEqual(@as(u32, 1), rises);
+    try testing.expectEqual(bit(.start), prev);
+    try testing.expectEqual(@as(u16, 0), h.step(0, 16));
+    try testing.expectEqual(@as(u16, 0), h.step(0, 16));
+
+    // In between (500 ms): neither.
+    var m: Sim = .{ .m = .init(&snouty_maze) };
+    for (0..31) |_| try testing.expectEqual(@as(u16, 0), m.step(btn(.c), 16));
+    try testing.expectEqual(@as(u16, 0), m.step(0, 16));
+    try testing.expectEqual(@as(u16, 0), m.step(0, 16));
+}
+
+test "snouty-maze: a quick tap of C still reaches the cart" {
+    var s: Sim = .{ .m = .init(&snouty_maze) };
+    _ = s.step(0, 16);
+    s.t += 3 * ms;
+    try testing.expectEqual(@as(u16, 0), s.m.update(btn(.c), s.t, s.presents));
+    s.t += 3 * ms;
+    try testing.expectEqual(bit(.a), s.m.update(0, s.t, s.presents));
+    try testing.expectEqual(bit(.a), s.step(0, 16));
+    try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+}
+
+test "snouty-maze: nothing masked, never b, select or click" {
+    // Every combination held for 200 ms: exactly the direct bits of the
+    // direction buttons (C adds nothing before its hold), never a forbidden bit.
+    const forbidden = bit(.b) | bit(.select) | bit(.click);
+    for (0..32) |combo_usize| {
+        const combo: u8 = @intCast(combo_usize);
+        var expect: u16 = 0;
+        if (combo & btn(.a) != 0) expect |= bit(.left);
+        if (combo & btn(.b) != 0) expect |= bit(.right);
+        if (combo & btn(.up) != 0) expect |= bit(.up);
+        if (combo & btn(.down) != 0) expect |= bit(.down);
+        var s: Sim = .{ .m = .init(&snouty_maze) };
+        var out: u16 = 0;
+        for (0..12) |_| {
+            out = s.step(combo, 16);
+            try testing.expectEqual(@as(u16, 0), out & forbidden);
+        }
+        try testing.expectEqual(expect, out);
+        // Release everything: at most the C tap pulse, still nothing forbidden.
+        out = s.step(0, 16);
+        try testing.expectEqual(@as(u16, 0), out & forbidden);
+        try testing.expectEqual(if (combo & btn(.c) != 0) bit(.a) else 0, out);
+    }
 }
 
 test "control bits match the SYCL Controls layout" {
