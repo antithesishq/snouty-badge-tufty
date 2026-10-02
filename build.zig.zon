@@ -1,0 +1,22 @@
+.{
+    .name = .snouty_tufty,
+    .fingerprint = 0x622a95db92402bb0,
+    .version = "0.0.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .minimum_zig_version = "0.17.0-dev.1936+5a625d5f3",
+    .dependencies = .{
+        // The Snouty monorepo (git submodule): carts are built by its own
+        // build.zig and embedded into the Tufty OS image.
+        .snouty_badge = .{
+            .path = "snouty-badge",
+        },
+        .microzig = .{
+            .url = "https://github.com/ZigEmbeddedGroup/microzig/releases/download/0.17.7/microzig.tar.gz",
+            .hash = "microzig-0.17.7-D20YSb7KAAAdJvjGJpx-9NG8th__5s2OaJbug645qrgM",
+        },
+    },
+}
