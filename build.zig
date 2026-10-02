@@ -56,8 +56,8 @@ const carts = [_]Cart{
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
     .{ .name = "snoutenstein", .binary = "snoutenstein" },
     // Crop: an exact 2x keeps the dither cells regular and the spheres round.
-    // tufty20 = full15's scene at 20 fps (docs/ports/snouty-reflections.md).
-    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "tufty20" },
+    // full15 = the full scene at 15 fps; the carts stay unmodified (docs/ports/snouty-reflections.md).
+    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "full15" },
 };
 
 const Scale = enum { fit, crop, native };

@@ -1,5 +1,15 @@
 # snouty-reflections on the Tufty
 
+> **2026-10-02, shipped variant: `full15`, carts unmodified.** Adrian's
+> rule: Tufty-specific work lives in this repo, and the monorepo carts stay
+> as they are. So the submodule is back at 48c0d18, and the Tufty build
+> passes the stock `-Dreflections_variant=full15`. That is the same scene
+> and the same render cost as `tufty20` below (65.72 ms worst at 150 MHz,
+> about 39.4 ms at 250 MHz), at 15 fps against a 66.7 ms budget. The
+> `tufty20` notes below record the 20 fps option. Its cart commit
+> (cfe3046, branch `reflections/tufty20`) exists only in this repo's
+> submodule clone and is not used.
+
 Snouty on the Water is a real-time ray tracer: chrome spheres on a rippling
 lake, four presets, and a freeze-frame path tracer (M4). The sources are in
 `snouty-badge/carts/snouty-reflections`. The submodule is pinned at cfe3046,
