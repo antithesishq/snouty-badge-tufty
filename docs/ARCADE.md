@@ -157,7 +157,6 @@ image size. The image size is its `.text` + `.data`. BSS costs no flash, so
 demosnout's 174 KB `.bss` takes none.
 
 The [port notes](ports/README.md) give the sizes of the other four carts
-(`.text` + `.data`): snouty-bugs ~56 KB, snouty-maze ~69 KB,
-snoutenstein ~97 KB, and snouty-reflections ~134 KB (cut20). With all
-six carts the arcade comes to roughly 610 KB of the
-1792 KB budget.
+(`.text` + `.data`): snouty-bugs ~56 KB, snouty-maze ~70 KB,
+snoutenstein ~98 KB, and snouty-reflections ~108 KB (tufty20). With all
+six carts the arcade comes to 584 KB of the 1792 KB budget (32.6%).

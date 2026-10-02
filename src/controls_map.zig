@@ -19,12 +19,19 @@
 ///   pulses   every rising output bit stays set for at least 2 cart
 ///            presents, so a cart that samples once per update (e.g.
 ///            snouty-reflections at 20 fps) always sees it.
-///   latch    `latch` bits are latched on (kept set with nothing held) by a
-///            double tap: a tap (released within `tap_ms`), then a new press
-///            within `double_ms` of that release. `unlatch` bits are cleared
-///            when a binding becomes active (a press, or a chord forming);
-///            that press is spent and never starts a double tap. A binding
-///            with both (snoutenstein's UP) toggles: double tap on, touch off.
+///   latch    `latch` bits are latched on (kept set with nothing held) by
+///            `latch_by`: `.double_tap` = a tap (released within `tap_ms`),
+///            then a new press within `double_ms` of that release;
+///            `.press` = any press. `unlatch` bits are cleared when a
+///            binding becomes active (a press, or a chord forming); that
+///            press is spent and never starts a double tap. A binding with
+///            both (snoutenstein's UP) toggles: double tap on, touch off.
+///            `retrigger`: a press while the bits are already latched drops
+///            them for `min_presents` presents and raises them again, so the
+///            cart sees a fresh press edge without the bits going off for
+///            good (snouty-bugs' C: press = autofire on, later presses
+///            re-press A). Nothing is ever latched at boot, and a fresh
+///            mapper (a HOME restart) clears every latch.
 const std = @import("std");
 
 /// Bit positions of the SYCL `Controls` packed struct (os_abi / api.zig):
@@ -52,18 +59,33 @@ pub const Binding = struct {
     tap: u16 = 0,
     /// Controls bits from hold_ms of holding until release.
     hold: u16 = 0,
-    /// Controls bits latched on by a double tap (see `double_ms`).
+    /// Controls bits this binding latches on (kept set with nothing held),
+    /// when `latch_by` says so.
     latch: u16 = 0,
+    /// What latches `latch`: a double tap (see `double_ms`), or any press.
+    latch_by: LatchBy = .double_tap,
+    /// A press while `latch` is already latched re-triggers it: the bits
+    /// drop for min_presents presents and rise again (a fresh press edge).
+    retrigger: bool = false,
     /// Latched bits this binding clears when it becomes active.
     unlatch: u16 = 0,
     tap_ms: u16 = 300,
     hold_ms: u16 = 500,
-    /// A tap, then a press within this (release to press), latches `latch`.
+    /// A tap, then a press within this (release to press), latches `latch`
+    /// (latch_by = .double_tap).
     double_ms: u16 = 250,
 
     fn is_chord(b: Binding) bool {
         return @popCount(b.on) > 1;
     }
+};
+
+/// What switches a binding's `latch` bits on.
+pub const LatchBy = enum {
+    /// A tap (released within tap_ms), then a press within double_ms.
+    double_tap,
+    /// Any press (the binding becoming active).
+    press,
 };
 
 pub const Map = struct {
@@ -96,8 +118,10 @@ pub const Mapper = struct {
     /// Pulse stretch per output bit: asserted while presents < until.
     until: [16]u32 = @splat(0),
     prev_out: u16 = 0,
-    /// Bits latched on by a double tap, until an `unlatch` binding fires.
+    /// Latched bits, on until an `unlatch` binding fires (or init).
     latched: u16 = 0,
+    /// Re-trigger gaps: a latched bit is forced low while presents < gap_until.
+    gap_until: [16]u32 = @splat(0),
     /// When each binding's last tap ended, if that tap may start a double
     /// tap (null after a long press, or after a spent press).
     tap_end: [max_bindings]?u64 = @splat(null),
@@ -141,7 +165,7 @@ pub const Mapper = struct {
                 if (!m.active[i]) {
                     m.active[i] = true;
                     m.active_since[i] = now_us;
-                    m.activate_latch(i, bd, now_us);
+                    m.activate_latch(i, bd, now_us, presents + map.min_presents);
                 }
                 const dur = now_us - m.active_since[i];
                 const delayed = !bd.is_chord() and members & bd.on != 0 and dur < chord_us;
@@ -163,7 +187,12 @@ pub const Mapper = struct {
             }
         }
 
-        level |= m.latched;
+        // Latched bits, minus any in a re-trigger gap.
+        var gap: u16 = 0;
+        for (0..16) |bi| {
+            if (presents < m.gap_until[bi]) gap |= @as(u16, 1) << @intCast(bi);
+        }
+        level = (level | m.latched) & ~gap;
 
         // Stretch every rising bit (level edge or pulse) over min_presents.
         const rising = (level & ~m.prev_out) | pulse;
@@ -174,27 +203,42 @@ pub const Mapper = struct {
         for (0..16) |bi| {
             if (presents < m.until[bi]) out |= @as(u16, 1) << @intCast(bi);
         }
+        // A gap beats a stretch, so a re-trigger is always a real edge.
+        out &= ~gap;
 
         m.prev_held = held;
         m.prev_out = out;
         return out;
     }
 
-    /// Binding `i` just became active: an unlatch press clears its bits
-    /// (and is spent); otherwise a press soon after a tap latches (spent
-    /// too, so a third tap does not start another double tap).
-    fn activate_latch(m: *Mapper, i: usize, bd: Binding, now_us: u64) void {
+    /// Binding `i` just became active. In order: an unlatch press clears
+    /// its bits (and is spent); a `retrigger` press of bits already latched
+    /// gaps them until `gap_end` (the next presents count they may rise
+    /// at); otherwise a press that meets `latch_by` latches (spent too, so
+    /// a third tap does not start another double tap).
+    fn activate_latch(m: *Mapper, i: usize, bd: Binding, now_us: u64, gap_end: u32) void {
         const tap_end = m.tap_end[i];
         m.tap_end[i] = null;
         m.spent[i] = false;
         if (bd.unlatch & m.latched != 0) {
             m.latched &= ~bd.unlatch;
             m.spent[i] = true;
-        } else if (bd.latch != 0) {
-            if (tap_end) |t| if (now_us - t <= @as(u64, bd.double_ms) * 1000) {
+        } else if (bd.latch == 0) {
+            return;
+        } else if (bd.retrigger and m.latched & bd.latch == bd.latch) {
+            for (0..16) |bi| {
+                if (bd.latch & (@as(u16, 1) << @intCast(bi)) != 0) m.gap_until[bi] = gap_end;
+            }
+            m.spent[i] = true;
+        } else {
+            const trigger = switch (bd.latch_by) {
+                .press => true,
+                .double_tap => if (tap_end) |t| now_us - t <= @as(u64, bd.double_ms) * 1000 else false,
+            };
+            if (trigger) {
                 m.latched |= bd.latch;
                 m.spent[i] = true;
-            };
+            }
         }
     }
 };
@@ -307,8 +351,30 @@ pub const snouty_maze: Map = .{
     },
 };
 
+/// snouty-bugs (docs/ports/snouty-bugs.md). The zapper fires while the
+/// cart's A is held and firing never costs anything, so C latches autofire
+/// on: the first C also starts a normal game from the title, and any later
+/// C re-presses A, which starts the next game after a game over. That frees
+/// the right thumb for UP/DOWN, which it cannot work while holding C. The
+/// left thumb rocks A/B for left/right. A+B = the cart's B (hold to rewind,
+/// Hardcore on the title), UP+DOWN = Start (pause/resume). chord_ms = 0: a
+/// one-frame leak of left/right or up/down before a chord cancels in the
+/// cart.
+pub const snouty_bugs: Map = .{
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.c), .latch = bit(.a), .latch_by = .press, .retrigger = true },
+        .{ .on = btn(.up), .held = bit(.up) },
+        .{ .on = btn(.down), .held = bit(.down) },
+        .{ .on = btn(.a) | btn(.b), .held = bit(.b) },
+        .{ .on = btn(.up) | btn(.down), .held = bit(.start) },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
+    if (std.mem.eql(u8, name, "snouty-bugs")) return &snouty_bugs;
     if (std.mem.eql(u8, name, "snouty-run")) return &snouty_run;
     if (std.mem.eql(u8, name, "demosnout")) return &demosnout;
     if (std.mem.eql(u8, name, "snoutenstein")) return &snoutenstein;
@@ -808,6 +874,142 @@ test "snouty-maze: nothing masked, never b, select or click" {
         out = s.step(0, 16);
         try testing.expectEqual(@as(u16, 0), out & forbidden);
         try testing.expectEqual(if (combo & btn(.c) != 0) bit(.a) else 0, out);
+    }
+}
+
+/// A model of a cart's once-per-frame edge detector (snouty-bugs' `meta`,
+/// which starts at zero): counts the rising edges of `c` over the presents
+/// it is fed.
+const Edges = struct {
+    prev: u16 = 0,
+    count: u32 = 0,
+
+    fn feed(e: *Edges, out: u16, c: Control) void {
+        if (out & bit(c) != 0 and e.prev & bit(c) == 0) e.count += 1;
+        e.prev = out;
+    }
+};
+
+test "snouty-bugs: nothing is latched at boot, so the title is not skipped" {
+    try testing.expectEqual(&snouty_bugs, for_cart("snouty-bugs"));
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    var e: Edges = .{};
+    for (0..120) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 0), e.count);
+    // Steering alone never fires either.
+    for (0..30) |_| try testing.expectEqual(bit(.left) | bit(.up), s.step(btn(.a) | btn(.up), 16));
+}
+
+test "snouty-bugs: one tap of C starts the game and fires from then on" {
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    var e: Edges = .{};
+    e.feed(s.step(0, 16), .a);
+    // A 3 ms tap between two presents.
+    s.t += 3 * ms;
+    e.feed(s.m.update(btn(.c), s.t, s.presents), .a);
+    s.t += 3 * ms;
+    _ = s.m.update(0, s.t, s.presents);
+    for (0..600) |_| {
+        const out = s.step(0, 16);
+        try testing.expect(out & bit(.a) != 0);
+        e.feed(out, .a);
+    }
+    try testing.expectEqual(@as(u32, 1), e.count);
+}
+
+test "snouty-bugs: every later C is a fresh press of A, then autofire again" {
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    var e: Edges = .{};
+    e.feed(s.step(btn(.c), 16), .a);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    e.count = 0; // the latching press
+    try testing.expect(e.prev & bit(.a) != 0);
+    // A held press of C (5 frames), then a sub-present tap: each one drops
+    // A for at least one present and raises it again.
+    for (0..5) |_| e.feed(s.step(btn(.c), 16), .a);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 1), e.count);
+    s.t += 2 * ms;
+    e.feed(s.m.update(btn(.c), s.t, s.presents), .a);
+    s.t += 2 * ms;
+    _ = s.m.update(0, s.t, s.presents);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 2), e.count);
+    try testing.expect(e.prev & bit(.a) != 0);
+    // Two taps on consecutive presents still give two edges.
+    _ = s.step(btn(.c), 16);
+    e.feed(s.step(0, 16), .a);
+    e.feed(s.step(btn(.c), 16), .a);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expect(e.count >= 3);
+    try testing.expect(e.prev & bit(.a) != 0);
+}
+
+test "snouty-bugs: steer, rewind and pause while autofire runs" {
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    _ = s.step(btn(.c), 16);
+    for (0..5) |_| _ = s.step(0, 16);
+    const fire = bit(.a);
+    // Both thumbs steering: a diagonal plus fire, no hand on C.
+    for (0..10) |_| try testing.expectEqual(fire | bit(.right) | bit(.down), s.step(btn(.b) | btn(.down), 16));
+    for (0..10) |_| try testing.expectEqual(fire | bit(.left) | bit(.up), s.step(btn(.a) | btn(.up), 16));
+    // A+B: rewind (the cart's B) for every frame of the hold, no left/right.
+    _ = s.step(btn(.a) | btn(.b) | btn(.up), 16);
+    for (0..120) |_| {
+        const out = s.step(btn(.a) | btn(.b) | btn(.up), 16);
+        try testing.expectEqual(fire | bit(.b) | bit(.up), out);
+    }
+    for (0..5) |_| _ = s.step(0, 16);
+    // UP+DOWN: Start (pause), no up/down.
+    _ = s.step(btn(.up) | btn(.down), 16);
+    try testing.expectEqual(fire | bit(.start), s.step(btn(.up) | btn(.down), 16));
+    try testing.expectEqual(fire, s.step(0, 16));
+}
+
+test "snouty-bugs: Hardcore (A+B) from the title, at boot or after a game" {
+    // At boot: B rises, A never does (the title checks A first).
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    var a: Edges = .{};
+    var b: Edges = .{};
+    for (0..5) |_| {
+        const out = s.step(btn(.a) | btn(.b), 16);
+        a.feed(out, .a);
+        b.feed(out, .b);
+    }
+    try testing.expectEqual(@as(u32, 0), a.count);
+    try testing.expectEqual(@as(u32, 1), b.count);
+    // After a game with autofire latched: A is steady, so again only B rises.
+    var t: Sim = .{ .m = .init(&snouty_bugs) };
+    _ = t.step(btn(.c), 16);
+    for (0..5) |_| _ = t.step(0, 16);
+    a = .{ .prev = bit(.a) };
+    b = .{};
+    for (0..5) |_| {
+        const out = t.step(btn(.b) | btn(.a), 16);
+        a.feed(out, .a);
+        b.feed(out, .b);
+    }
+    try testing.expectEqual(@as(u32, 0), a.count);
+    try testing.expectEqual(@as(u32, 1), b.count);
+}
+
+test "snouty-bugs: a HOME restart (fresh mapper) clears the latch" {
+    var s: Sim = .{ .m = .init(&snouty_bugs) };
+    _ = s.step(btn(.c), 16);
+    for (0..5) |_| try testing.expect(s.step(0, 16) & bit(.a) != 0);
+    s.m = .init(&snouty_bugs);
+    s.presents = 0;
+    for (0..5) |_| try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+}
+
+test "snouty-bugs: never select or click, for any buttons" {
+    for (0..32) |combo_usize| {
+        const combo: u8 = @intCast(combo_usize);
+        var s: Sim = .{ .m = .init(&snouty_bugs) };
+        for (0..10) |_| {
+            const out = s.step(combo, 16);
+            try testing.expectEqual(@as(u16, 0), out & (bit(.select) | bit(.click)));
+        }
     }
 }
 

@@ -7,8 +7,8 @@ separately.
 
 | Cart | One line |
 |---|---|
-| [snouty-bugs](snouty-bugs.md) | 60 fps shooter. It needs 4 directions + held fire + held rewind. The split layout makes all of them playable with no cart change. Fit; 10.4 ms worst becomes ~6.3 ms |
-| [snoutenstein](snoutenstein.md) | 60 fps raycaster. 8 functions on 5 buttons: rewind on A+B, weapon/pause as tap/hold of UP+DOWN. Fit; 5.7 ms worst becomes ~3.4 ms |
+| [snouty-bugs](snouty-bugs.md) | 60 fps shooter. It needs 4 directions + held fire + held rewind. One tap of C latches autofire, so both thumbs steer; no cart change. Fit; 10.4 ms worst becomes ~6.3 ms |
+| [snoutenstein](snoutenstein.md) | 60 fps raycaster. 8 functions on 5 buttons: rewind on A+B, weapon/pause as tap/hold of UP+DOWN, double tap UP = autowalk latch. Fit; 5.7 ms worst becomes ~3.4 ms |
 | [snouty-maze](snouty-maze.md) | 60 fps screensaver with optional walking. No chords: C tap = skip, C hold = name strip. Fit; 11.4 ms worst becomes ~6.8 ms, so a 16x16 maze fits |
 | [demosnout](demosnout.md) | 60 fps demo. A/B/C/UP/DOWN map 1:1 onto a/b/select/up/down. Crop; 5.6 ms worst becomes ~3.3 ms. Largest `.bss` (174.5 KB) |
 | [snouty-reflections](snouty-reflections.md) | Ray tracer. Ported with the `tufty20` variant (full15's full scene at 20 fps, on the submodule's `tufty` branch, docs/CARTS.md): 65.7 ms worst at 150 MHz on all four presets, ~39.4 ms at 250 vs 47. full20 is still over (~54 ms). Crop |
@@ -42,9 +42,17 @@ See the fallback in snouty-bugs.md.
   `hold_ms` (tap), or once held for `hold_ms` (hold).
 * **Pulses** last at least 2 cart presents, not 2 OS ticks. Reflections runs
   at 20 fps, and the carts detect edges once per update.
-* **autofire** (fallback only): a bit is held while any button of a set is
-  held, plus a hold-over. It never runs constantly. snouty-bugs' title would
-  see a press edge on frame 1 and skip itself.
+* **latch**: `latch` bits stay set with nothing held once `latch_by` fires:
+  `.double_tap` (a tap, then a press within `double_ms`; snoutenstein's UP =
+  autowalk) or `.press` (any press; snouty-bugs' C = autofire). `unlatch`
+  bits are cleared when a binding becomes active (snoutenstein: UP, DOWN,
+  A+B). With `retrigger`, a press while already latched drops the bits for
+  `min_presents` presents and raises them again, a fresh press edge with no
+  lasting gap (snouty-bugs: a C tap starts the next game). Nothing is ever
+  latched at boot (a bit held from frame 1 would skip bugs' title), and a
+  HOME restart clears every latch.
+* **fire while steering** (rejected fallback for bugs): a bit is held while
+  any button of a set is held, plus a hold-over. See snouty-bugs.md.
 * **Optional, OS-wide:** HOME tap (< 500 ms) = a start pulse, HOME hold = menu,
   long hold = BOOTSEL. Start means "pause" in bugs and snoutenstein, and this
   would free a chord slot in snoutenstein, maze and reflections.
@@ -59,8 +67,8 @@ See the fallback in snouty-bugs.md.
 |---|---|---|---|---|---|
 | A | left | left (turn) | left (pivot) | a (skip/jump) | left (orbit) |
 | B | right | right (turn) | right (pivot) | b (hold/close) | right (orbit) |
-| C | a (fire, held) | a (fire, held) | tap: a (skip); hold: start | select (picker) | a (freeze, on the press) |
-| UP | up | up (walk) | up (step) | up (picker) | up (height) |
+| C | a (fire), latched on by a press; later taps re-press | a (fire, held) | tap: a (skip); hold: start | select (picker) | a (freeze, on the press) |
+| UP | up | up (walk); double tap: autowalk latch | up (step) | up (picker) | up (height) |
 | DOWN | down | down (back) | down (step) | down (picker) | down (height) |
 | A+B | b (rewind, held) | b (rewind, held) | - | - | select (preset) |
 | U+D | start (pause) | tap: select (weapon); hold: start (pause) | - | - | b (dither) |
