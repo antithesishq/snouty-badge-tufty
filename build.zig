@@ -33,6 +33,7 @@ const Cart = struct { name: []const u8, binary: []const u8, scale: Scale = .fit 
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
+    .{ .name = "snoutenstein", .binary = "snoutenstein" },
 };
 
 const Scale = enum { fit, crop, native };
