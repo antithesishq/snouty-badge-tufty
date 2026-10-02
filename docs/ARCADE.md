@@ -158,5 +158,6 @@ demosnout's 174 KB `.bss` takes none.
 
 The [port notes](ports/README.md) give the sizes of the other four carts
 (`.text` + `.data`): snouty-bugs ~56 KB, snouty-maze ~70 KB,
-snoutenstein ~98 KB, and snouty-reflections ~108 KB (tufty20). With all
-six carts the arcade comes to 584 KB of the 1792 KB budget (32.6%).
+snoutenstein ~98 KB, snouty-reflections ~108 KB (tufty20), and
+snouty-flyover ~71 KB. With all seven carts the arcade comes to 655 KB of
+the 1792 KB budget (36.6%).

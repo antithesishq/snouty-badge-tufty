@@ -65,6 +65,9 @@ const carts = [_]Cart{
     // 16x16 (the cart's maximum): 15.3 ms worst modelled at 150 MHz, ~9.2 ms
     // at 250 MHz (docs/ports/snouty-maze.md).
     .{ .name = "snouty-maze", .binary = "snouty-maze", .maze_size = 16 },
+    // Fit: the verb caption is at y 119..127, which crop would cut. The
+    // cart's own 30 fps lock and options (docs/ports/snouty-flyover.md).
+    .{ .name = "snouty-flyover", .binary = "snouty-flyover" },
 };
 
 const Scale = enum { fit, crop, native };
@@ -78,6 +81,7 @@ const blurbs = [_][2][]const u8{
     .{ "snouty-bugs", "C FIRE  A+B REWIND  UP+DN PAUSE" },
     .{ "snouty-reflections", "A/B ORBIT  UP/DN HIGH  C FREEZE" },
     .{ "snouty-maze", "A/B TURN  UP/DN STEP  C SKIP" },
+    .{ "snouty-flyover", "C VERB  A+B BOOST  UP+DN SKIP" },
 };
 
 /// Arcade flash budget: every firmware image must end below this address.
