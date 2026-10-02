@@ -58,8 +58,8 @@ const carts = [_]Cart{
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
     .{ .name = "snoutenstein", .binary = "snoutenstein" },
     // Crop: an exact 2x keeps the dither cells regular and the spheres round.
-    // full15 = the full scene at 15 fps; the carts stay unmodified (docs/ports/snouty-reflections.md).
-    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "full15" },
+    // tufty20 = full15's scene at 20 fps, on the snouty-badge `tufty` branch (docs/CARTS.md).
+    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "tufty20" },
     // 16x16 (the cart's maximum): 15.3 ms worst modelled at 150 MHz, ~9.2 ms
     // at 250 MHz (docs/ports/snouty-maze.md).
     .{ .name = "snouty-maze", .binary = "snouty-maze", .maze_size = 16 },

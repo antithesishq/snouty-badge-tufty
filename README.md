@@ -13,6 +13,7 @@ therefore run on core 1 with the Tufty's screen and buttons.
 * [docs/ARCADE.md](docs/ARCADE.md): the arcade UF2 (every cart behind a
   boot menu), how to add a cart, the flash budget
 * [docs/ports/](docs/ports/README.md): per-cart port notes and button maps
+* [docs/CARTS.md](docs/CARTS.md): Tufty-only cart changes (the submodule's `tufty` branch)
 
 ```sh
 git clone --recursive <this repo>
