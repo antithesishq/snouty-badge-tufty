@@ -56,6 +56,7 @@ const Scale = enum { fit, crop, native };
 const blurbs = [_][2][]const u8{
     .{ "snouty-run", "C JUMP" },
     .{ "demosnout", "A SKIP  B HOLD  C PARTS" },
+    .{ "snoutenstein", "A/B TURN  UP/DN WALK  C FIRE" },
 };
 
 /// Arcade flash budget: every firmware image must end below this address.
