@@ -42,11 +42,22 @@ const MicroBuild = microzig.MicroBuild(.{
 /// name in capitals, dashes as spaces). The controls map comes from
 /// controls_map.for_cart(name). The order here is the arcade menu order;
 /// every row is in snouty-tufty-arcade.uf2 (docs/ARCADE.md).
-const Cart = struct { name: []const u8, binary: []const u8, scale: Scale = .fit, title: ?[]const u8 = null };
+/// `reflections_variant`: the monorepo's -Dreflections_variant for that cart
+/// (null: the option is not passed).
+const Cart = struct {
+    name: []const u8,
+    binary: []const u8,
+    scale: Scale = .fit,
+    title: ?[]const u8 = null,
+    reflections_variant: ?[]const u8 = null,
+};
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
     .{ .name = "snoutenstein", .binary = "snoutenstein" },
+    // Crop: an exact 2x keeps the dither cells regular and the spheres round.
+    // tufty20 = full15's scene at 20 fps (docs/ports/snouty-reflections.md).
+    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "tufty20" },
 };
 
 const Scale = enum { fit, crop, native };
@@ -57,6 +68,7 @@ const blurbs = [_][2][]const u8{
     .{ "snouty-run", "C JUMP" },
     .{ "demosnout", "A SKIP  B HOLD  C PARTS" },
     .{ "snoutenstein", "A/B TURN  UP/DN WALK  C FIRE" },
+    .{ "snouty-reflections", "A/B ORBIT  UP/DN HIGH  C FREEZE" },
 };
 
 /// Arcade flash budget: every firmware image must end below this address.
@@ -83,7 +95,7 @@ pub fn build(b: *Build) void {
 
     const cart = for (carts) |c| {
         if (std.mem.eql(u8, c.name, cart_name)) break c;
-    } else std.debug.panic("-Dcart: unknown cart '{s}' (known: snouty-run, demosnout)", .{cart_name});
+    } else std.debug.panic("-Dcart: unknown cart '{s}' (see the carts table in build.zig)", .{cart_name});
     add_cart_host(b, mb, tufty_target, cart, scale_option orelse cart.scale);
 
     // M2: every cart of the table behind the boot menu, each at its table scale.
@@ -165,7 +177,10 @@ fn add_hello(
 /// launch). `inspect`: also install the ELF and the image under
 /// firmware/cart/ (done once per cart, by add_arcade).
 fn cart_bin(b: *Build, cart: Cart, inspect: bool) Build.LazyPath {
-    const badge = b.dependency("snouty_badge", .{ .cart = cart.name });
+    const badge = if (cart.reflections_variant) |v|
+        b.dependency("snouty_badge", .{ .cart = cart.name, .reflections_variant = v })
+    else
+        b.dependency("snouty_badge", .{ .cart = cart.name });
     const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
     const bin = b.addObjCopy(elf, .{ .basename = b.fmt("{s}.bin", .{cart.binary}), .format = .binary }).getOutput();
     if (inspect) {

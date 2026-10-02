@@ -267,11 +267,34 @@ pub const snoutenstein: Map = .{
     },
 };
 
+/// snouty-reflections (app.zig handle_input, once per 20 fps update): held
+/// left/right orbit, held up/down change the eye height, and the edges of
+/// A (freeze), B (dither), SELECT (preset) and START (attract).
+/// Split d-pad: A/B orbit, UP/DOWN height, C freezes at once (C is in no
+/// chord, so it is never delayed). A+B = SELECT, UP+DOWN = B. A direction
+/// press leaves attract for the free camera, so chord_ms = 60 keeps a
+/// chord from leaking a direction first (about one 20 fps update of extra
+/// latency). START is not mapped: free camera returns to attract after
+/// 20 s, a converged freeze after 60 s, and a HOME tap restarts the cart.
+pub const snouty_reflections: Map = .{
+    .chord_ms = 60,
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.up), .held = bit(.up) },
+        .{ .on = btn(.down), .held = bit(.down) },
+        .{ .on = btn(.c), .held = bit(.a) },
+        .{ .on = btn(.a) | btn(.b), .held = bit(.select) },
+        .{ .on = btn(.up) | btn(.down), .held = bit(.b) },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-run")) return &snouty_run;
     if (std.mem.eql(u8, name, "demosnout")) return &demosnout;
     if (std.mem.eql(u8, name, "snoutenstein")) return &snoutenstein;
+    if (std.mem.eql(u8, name, "snouty-reflections")) return &snouty_reflections;
     return &default;
 }
 
@@ -547,6 +570,142 @@ test "snoutenstein: rewind, weapon, pause" {
             try testing.expect(out & (bit(.select) | bit(.start)) != bit(.select) | bit(.start));
         }
     }
+}
+
+/// A 20 fps cart behind a fast OS loop: the mapper runs every 1 ms, the
+/// cart samples the Controls once per 50 ms update (then presents) and
+/// detects edges the way snouty-reflections' input.zig does. Counts what
+/// the cart saw.
+const Cart20 = struct {
+    m: Mapper,
+    t_ms: u64 = 0,
+    presents: u32 = 0,
+    out: u16 = 0,
+    prev: u16 = 0,
+    /// Rising edges seen by the cart, per Controls bit.
+    edges: [16]u32 = @splat(0),
+    /// Updates on which the cart saw the bit held, per Controls bit.
+    held_updates: [16]u32 = @splat(0),
+
+    fn run(c: *Cart20, held: u8, dur_ms: u64) void {
+        for (0..dur_ms) |_| {
+            c.t_ms += 1;
+            c.out = c.m.update(held, c.t_ms * ms, c.presents);
+            if (c.t_ms % 50 == 0) {
+                // A cart update: input.update(controls), then a present.
+                for (0..16) |bi| {
+                    const b = @as(u16, 1) << @intCast(bi);
+                    if (c.out & b != 0) c.held_updates[bi] += 1;
+                    if (c.out & b != 0 and c.prev & b == 0) c.edges[bi] += 1;
+                }
+                c.prev = c.out;
+                c.presents += 1;
+            }
+        }
+    }
+
+    fn edges_of(c: *const Cart20, ctl: Control) u32 {
+        return c.edges[@intFromEnum(ctl)];
+    }
+
+    fn held_of(c: *const Cart20, ctl: Control) u32 {
+        return c.held_updates[@intFromEnum(ctl)];
+    }
+};
+
+test "reflections: for_cart picks its map" {
+    try testing.expectEqual(&snouty_reflections, for_cart("snouty-reflections"));
+    try testing.expectEqual(&snouty_run, for_cart("snouty-run"));
+}
+
+test "reflections: C freezes on the first update, no delay" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(0, 10);
+    // Pressed 40 ms before an update: the cart sees A on that update.
+    c.run(btn(.c), 40);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    c.run(btn(.c), 500);
+    c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    // A second press unfreezes: a second edge.
+    c.run(btn(.c), 30);
+    c.run(0, 100);
+    try testing.expectEqual(@as(u32, 2), c.edges_of(.a));
+}
+
+test "reflections: a quick C tap between updates still freezes once" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(0, 5);
+    c.run(btn(.c), 10); // 5..15 ms; the next update is at 50 ms
+    c.run(0, 300);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+}
+
+test "reflections: A held orbits left, never a preset change" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(btn(.a), 500);
+    try testing.expect(c.held_of(.left) >= 8);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.right));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.select));
+}
+
+test "reflections: A+B 30 ms apart = one preset change, no orbit leak" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(0, 20);
+    c.run(btn(.a), 30);
+    c.run(btn(.a) | btn(.b), 400);
+    // Released one at a time: the one still held stays masked.
+    c.run(btn(.b), 200);
+    c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.select));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.left));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.right));
+}
+
+test "reflections: UP+DOWN = one dither step, no height change" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(btn(.down), 40);
+    c.run(btn(.up) | btn(.down), 300);
+    c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.b));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.up));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.down));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.a));
+}
+
+test "reflections: orbit and height together, C freezes while steering" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(btn(.a) | btn(.up), 300);
+    try testing.expect(c.held_of(.left) >= 4);
+    try testing.expect(c.held_of(.up) >= 4);
+    c.run(btn(.a) | btn(.up) | btn(.c), 100);
+    c.run(0, 100);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.select));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.b));
+}
+
+test "reflections: a chord formed after a long hold changes the preset once" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(btn(.a), 300);
+    const left = c.held_of(.left);
+    try testing.expect(left >= 4);
+    c.run(btn(.a) | btn(.b), 300);
+    c.run(0, 100);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.select));
+    // The orbit stops as soon as the chord forms (left was level, so it
+    // has no pulse stretch to run out).
+    try testing.expectEqual(left, c.held_of(.left));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.right));
+}
+
+test "reflections: START and click are never sent" {
+    var c: Cart20 = .{ .m = .init(&snouty_reflections) };
+    c.run(btn(.c), 2000);
+    c.run(btn(.a) | btn(.b) | btn(.up) | btn(.down), 1000);
+    c.run(0, 100);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.start));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.click));
 }
 
 test "control bits match the SYCL Controls layout" {

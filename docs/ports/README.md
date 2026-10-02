@@ -11,7 +11,7 @@ separately.
 | [snoutenstein](snoutenstein.md) | 60 fps raycaster. 8 functions on 5 buttons: rewind on A+B, weapon/pause as tap/hold of UP+DOWN. Fit; 5.7 ms worst becomes ~3.4 ms |
 | [snouty-maze](snouty-maze.md) | 60 fps screensaver with optional walking. No chords: C tap = skip, C hold = name strip. Fit; 11.4 ms worst becomes ~6.8 ms, so a 16x16 maze fits |
 | [demosnout](demosnout.md) | 60 fps demo. A/B/C/UP/DOWN map 1:1 onto a/b/select/up/down. Crop; 5.6 ms worst becomes ~3.3 ms. Largest `.bss` (174.5 KB) |
-| [snouty-reflections](snouty-reflections.md) | Ray tracer. full20 is still over at 250 MHz (90.5 ms becomes ~54 ms vs 47). Ship full15 (no change), or add a `tufty20` variant (2 lines, ~39 ms). Crop |
+| [snouty-reflections](snouty-reflections.md) | Ray tracer. Ported: the new `tufty20` variant (full15's full scene at 20 fps) is 65.7 ms worst at 150 MHz on all four presets, ~39.4 ms at 250 vs 47. full20 is still over (~54 ms). Crop |
 
 ## Layout assumption: the split d-pad
 
@@ -59,15 +59,15 @@ See the fallback in snouty-bugs.md.
 |---|---|---|---|---|---|
 | A | left | left (turn) | left (pivot) | a (skip/jump) | left (orbit) |
 | B | right | right (turn) | right (pivot) | b (hold/close) | right (orbit) |
-| C | a (fire, held) | a (fire, held) | tap: a (skip); hold: start | select (picker) | a (freeze); hold: start (optional) |
+| C | a (fire, held) | a (fire, held) | tap: a (skip); hold: start | select (picker) | a (freeze, on the press) |
 | UP | up | up (walk) | up (step) | up (picker) | up (height) |
 | DOWN | down | down (back) | down (step) | down (picker) | down (height) |
 | A+B | b (rewind, held) | b (rewind, held) | - | - | select (preset) |
 | U+D | start (pause) | tap: select (weapon); hold: start (pause) | - | - | b (dither) |
 | chord_ms | 0 | 0 | n/a | n/a | 60 |
-| Unmapped | select, click (unused) | click | select (no-op), B+Select (debug only) | start (= A), left/right, click | click |
+| Unmapped | select, click (unused) | click | select (no-op), B+Select (debug only) | start (= A), left/right, click | start (HOME tap restarts into attract), click |
 | Scale | fit | fit | fit (crop ok) | crop | crop |
-| Cart change | none | none | none | none | none (full15), or a 2-line `tufty20` variant |
+| Cart change | none | none | none | none | `tufty20` variant (monorepo cfe3046) |
 
 ## Perf at 250 MHz (calibrated busy ms at 150 MHz, x 0.6)
 
@@ -80,6 +80,7 @@ See the fallback in snouty-bugs.md.
 | reflections cut20 | 47.0 | 49.73 / 44.62 | 29.8 / 26.8 |
 | reflections full20 | 47.0 | 90.48 / 68.47 | 54.3 / 41.1 (over) |
 | reflections full15 | 62.7 | 64.83 / 60.63 | 38.9 / 36.4 |
+| **reflections tufty20 (shipped)** | 47.0 | 65.72 / 49.98 (all presets) | 39.4 / 30.0 |
 
 Each cart file gives the source of its numbers. The re-runs on 2026-10-02
 were made on ELFs built from the submodule in a scratch directory; the
