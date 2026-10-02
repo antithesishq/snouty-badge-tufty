@@ -156,7 +156,7 @@ controls:
 | Snouty Run | C jump |
 | Demosnout | A skip part, B hold, C part picker |
 | Snoutenstein | A/B turn, UP/DOWN walk, C fire, double-tap UP to autowalk, hold A+B to rewind, UP+DOWN: tap for weapon, hold to pause |
-| Snouty Bughunt | C turns autofire on (and starts), A/B/UP/DOWN fly, hold A+B to rewind, UP+DOWN pause |
+| Snouty Bughunt | C turns autofire on (and starts), A/B/UP/DOWN fly, fly into crates for weapons and extras, hold A+B to rewind, UP+DOWN pause |
 | Snouty Reflections | A/B orbit, UP/DOWN height, C freeze (path tracing), A+B lighting preset, UP+DOWN dither |
 | Snouty Maze | A/B turn, UP/DOWN step, tap C to skip, hold C for the name strip |
 | Snouty Flyover | A/B bank, UP climb, DOWN dive, C district verb, A+B boost, UP+DOWN: tap to skip, hold for autopilot |

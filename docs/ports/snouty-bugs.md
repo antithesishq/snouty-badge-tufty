@@ -1,7 +1,8 @@
 # snouty-bugs on the Tufty
 
 Snouty Bughunt is a 60 fps side-on bullet-hell shooter with rewind. The
-sources are in `snouty-badge/carts/snouty-bugs` (48c0d18). The cart is the
+sources are in `snouty-badge/carts/snouty-bugs` (ed63bfe = upstream
+`snouty-bugs/m6`, the powerups milestone, plus the Tufty labels). The cart is the
 unmodified RAM-mode build, embedded in the Tufty OS exactly as snouty-run is
 (see [snouty-run.md](snouty-run.md) section 5 for how the OS runs a cart).
 The map primitives are defined in [README.md](README.md) and
@@ -21,11 +22,19 @@ Flash as in [../DEPLOY.md](../DEPLOY.md). HOME short press restarts the cart
 at the title (fresh RAM image, autofire off again). HOME held 1 s reboots
 into BOOTSEL.
 
-UF2 facts (checked with `snouty-badge/tools/uf2_info.py`): 264 blocks,
-family `0xe48bff59` (RP2350_ARM_S), targets `0x10000000..0x10010800`
-(66 KB). That is far below `0x10200000`, and there is no `0x10ffff00`
-block. The cart blob (57,496 bytes) sits byte-identical in the payload at
-flash `0x10001eb8`.
+UF2 facts (from the build's `snouty-tufty-snouty-bugs.flash.txt`): 316
+blocks, family `0xe48bff59` (RP2350_ARM_S), targets `0x10000000..0x10013c00`
+(79 KB). That is far below `0x10200000`, and there is no `0x10ffff00`
+block. The cart blob (65,872 bytes) sits byte-identical in the payload at
+flash `0x10002940`. (M5 was 264 blocks and a 57,496-byte blob.)
+
+Since M6 the game has powerups: crates dropped by beetles, every fifth gnat
+and the boss's phase changes. Fly into one to collect it. The three weapon
+crates (F FUZZER spread, A ASSERT piercing beam, B BISECT homing) stack to
+level 5, FORK adds a ghost ship replaying the player's trail, RETRY is a
+one-hit shield ("FLAKY, RETRYING") and CORE HOURS refills 60 fuel. No new
+control: the map is unchanged, the current weapon shows as `F3` etc. in
+Coral in the HUD, and a rewind across a pickup puts the crate back.
 
 ## 2. Controls the cart reads
 
@@ -190,12 +199,12 @@ What you should see after power-on (~0.3 s panel bring-up):
 | Range | What |
 |---|---|
 | 0x20020000..0x20035100 | IPC block and the two framebuffers (OS zeroes it) |
-| 0x20035100 | `.cart_descriptor`, then `.text` (52,740), `.ARM.extab`, `.ARM.exidx`, `.data` (4,268) to 0x20043198 |
-| 0x20043198..0x20047630 | `.bss`, 17,560 bytes |
-| 0x20047630..0x20080000 | 231,888 bytes free for the stack and heap |
+| 0x20035100 | `.cart_descriptor`, then `.text` (58,896), `.ARM.extab`, `.ARM.exidx`, `.data` (6,376) to 0x20045250 |
+| 0x20045250..0x2004b7d0 | `.bss`, 25,984 bytes (the World grew from 4,236 to 6,340 bytes with the M6 pickups, bolt pool and fork trail) |
+| 0x2004b7d0..0x20080000 | 215,088 bytes free for the stack and heap |
 | 0x20080000 | initial MSP |
 
-The image is 57,496 bytes. `cart_image.validate` accepts it.
+The image is 65,872 bytes (57,496 at M5). `cart_image.validate` accepts it.
 
 ## 6. Bench
 
@@ -237,6 +246,12 @@ Two more runs through the same map check the latch in the cart itself:
 | 3,000 frames: tap C at 30, hold B (fly right into the wave) 60..1999, then idle, C taps every 300 from 2100 | Game over and back to the **title by frame 1600**. The title **stays up for 500 frames with A latched** (no skip). The C tap at 2100 starts a new game (score 0, firing) by frame 2125 | 6.93 / 9.40 |
 
 None of the 9,000 benched frames is over budget.
+
+The M6 powerups were benched on the SYCL side (`m2_play` 4,800 updates at
+150 MHz, upstream PLAN.md): mean 7.35 ms, worst 12.19 ms (73% of the
+budget; est. 4.4 / 7.3 ms at 250 MHz). The simulation stays under 1% of
+a frame with full bolt pools and three forks, so the extra bullets cost
+nothing measurable here either. Not re-benched through the Tufty map.
 
 ## 7. Risks and unknowns
 

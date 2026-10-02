@@ -10,6 +10,7 @@ changes. `snouty-badge` main is never modified from here.
 | 9cbf968 | `-Dbadge=tufty`: Tufty button names on screen (demosnout, snoutenstein, snouty-bugs) and a clock-seeded snouty-maze (below) |
 | c77fd61 | `-Dbadge=tufty` for snouty-flyover and snouty-genesis: Tufty button names on screen, genesis debug overlay off at boot (below) |
 | ddd04fc | snouty-zero: with `-Dbadge=tufty` the title also takes A (the Tufty's C), and the PRESS cards say `PRESS C` (docs/ports/snouty-zero.md) |
+| ed63bfe | merge of upstream main 70a5a27 (snouty-bugs M6 powerups: weapon crates, FORK ghosts, RETRY, CORE HOURS, tag `snouty-bugs/m6`); the bugs cart grows 57.5 -> 64.3 KB, dual boot 664.0 of 704 KB |
 
 ## `-Dbadge=tufty`
 
