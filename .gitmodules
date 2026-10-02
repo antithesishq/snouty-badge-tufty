@@ -1,0 +1,3 @@
+[submodule "snouty-badge"]
+	path = snouty-badge
+	url = https://github.com/antithesishq/snouty-badge.git
