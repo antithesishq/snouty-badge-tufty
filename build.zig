@@ -10,6 +10,15 @@
 //!   snouty-tufty-hello       M0 bring-up test screen, clk_sys 250 MHz
 //!   snouty-tufty-hello-150   the same at 150 MHz (fallback for the clock path)
 //!   snouty-tufty-<cart>      M1 Tufty OS running one SYCL RAM cart, 250 MHz
+//!   snouty-tufty-arcade      M2 every cart in `carts` behind a boot menu
+//!                            (docs/ARCADE.md)
+//!
+//!   zig build menu-png            render the arcade menu to docs/arcade-menu.png
+//!
+//! Each cart-host UF2 is checked after the build (tools/flash_check.zig):
+//! nothing may reach 0x101C0000, since 0x101C0000..0x10200000 is kept for
+//! a future XIP cart. The report, with every cart image's flash address,
+//! is installed next to the UF2 as `<name>.flash.txt`.
 //!
 //! The cart is built, unmodified, by the snouty-badge submodule's own
 //! build.zig (a path dependency), exactly as for the SYCL badge; we take its
@@ -28,14 +37,30 @@ const MicroBuild = microzig.MicroBuild(.{
 
 /// Carts the Tufty OS knows. `name` is the -Dcart name (the directory under
 /// snouty-badge/carts/), `binary` the firmware name its build installs,
-/// `scale` the cart's default scale mode (-Dscale overrides it).
-const Cart = struct { name: []const u8, binary: []const u8, scale: Scale = .fit };
+/// `scale` the cart's default scale mode (-Dscale overrides it in the
+/// single-cart build). Optional `title`: the arcade menu line (default: the
+/// name in capitals, dashes as spaces). The controls map comes from
+/// controls_map.for_cart(name). The order here is the arcade menu order;
+/// every row is in snouty-tufty-arcade.uf2 (docs/ARCADE.md).
+const Cart = struct { name: []const u8, binary: []const u8, scale: Scale = .fit, title: ?[]const u8 = null };
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
 };
 
 const Scale = enum { fit, crop, native };
+
+/// Arcade menu: a short controls line shown under the highlighted cart
+/// (at most 32 characters). A cart without one shows none.
+const blurbs = [_][2][]const u8{
+    .{ "snouty-run", "C JUMP" },
+    .{ "demosnout", "A SKIP  B HOLD  C PARTS" },
+};
+
+/// Arcade flash budget: every firmware image must end below this address.
+/// 0x101C0000..0x10200000 (256 KB) is reserved for a future XIP cart. The
+/// linker's 2 MB flash region still stops anything at 0x10200000 or above.
+const flash_limit: u32 = 0x101C0000;
 
 pub fn build(b: *Build) void {
     const cart_name = b.option([]const u8, "cart", "Cart for the Tufty OS image (default snouty-run)") orelse "snouty-run";
@@ -59,6 +84,37 @@ pub fn build(b: *Build) void {
     } else std.debug.panic("-Dcart: unknown cart '{s}' (known: snouty-run, demosnout)", .{cart_name});
     add_cart_host(b, mb, tufty_target, cart, scale_option orelse cart.scale);
 
+    // M2: every cart of the table behind the boot menu, each at its table scale.
+    add_arcade(b, mb, tufty_target);
+
+    const iris_mod = b.createModule(.{
+        .root_source_file = b.path("snouty-badge/lib/iris_mark.zig"),
+    });
+
+    // Host preview of the arcade menu: zig build menu-png.
+    const menu_png = b.addExecutable(.{
+        .name = "menu_png",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/menu_png.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{
+                .{ .name = "menu", .module = b.createModule(.{
+                    .root_source_file = b.path("src/menu.zig"),
+                    .imports = &.{
+                        .{ .name = "font", .module = font_mod },
+                        .{ .name = "iris_mark", .module = iris_mod },
+                    },
+                }) },
+                .{ .name = "cart_meta", .module = cart_meta(b, &carts).createModule() },
+            },
+        }),
+    });
+    const run_menu_png = b.addRunArtifact(menu_png);
+    run_menu_png.has_side_effects = true;
+    run_menu_png.addDirectoryArg(b.path("docs"));
+    b.step("menu-png", "Render the arcade menu to docs/arcade-menu.png").dependOn(&run_menu_png.step);
+
     // Host tests: the pure pixel / pattern / ABI code, no microzig.
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -67,6 +123,7 @@ pub fn build(b: *Build) void {
             .optimize = .Debug,
             .imports = &.{
                 .{ .name = "font", .module = font_mod },
+                .{ .name = "iris_mark", .module = iris_mod },
             },
         }),
     });
@@ -100,43 +157,143 @@ fn add_hello(
     install(mb, fw);
 }
 
-/// The Tufty OS with one cart embedded.
-fn add_cart_host(b: *Build, mb: *MicroBuild, target: *microzig.Target, cart: Cart, scale: Scale) void {
-    // Configure the monorepo for just this cart, RAM mode, default options.
+/// One cart's loadable bytes. The monorepo is configured for just this cart
+/// (RAM mode, default options); the cart ELF is objcopied from its link
+/// address 0x20035100 up to the end of .data (BSS is NOLOAD and is zeroed at
+/// launch). `inspect`: also install the ELF and the image under
+/// firmware/cart/ (done once per cart, by add_arcade).
+fn cart_bin(b: *Build, cart: Cart, inspect: bool) Build.LazyPath {
     const badge = b.dependency("snouty_badge", .{ .cart = cart.name });
-    const cart_elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
+    const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
+    const bin = b.addObjCopy(elf, .{ .basename = b.fmt("{s}.bin", .{cart.binary}), .format = .binary }).getOutput();
+    if (inspect) {
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(elf, .{ .custom = "firmware/cart" }, b.fmt("{s}.elf", .{cart.binary})).step);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "firmware/cart" }, b.fmt("{s}.bin", .{cart.binary})).step);
+    }
+    return bin;
+}
 
-    // The cart's loadable bytes, from its link address 0x20035100 up to the
-    // end of .data (BSS is NOLOAD and is zeroed at launch).
-    const cart_bin = b.addObjCopy(cart_elf, .{ .basename = "cart.bin", .format = .binary });
+/// M1: the Tufty OS with one cart embedded, booted straight away.
+fn add_cart_host(b: *Build, mb: *MicroBuild, target: *microzig.Target, cart: Cart, scale: Scale) void {
+    var single = cart;
+    single.scale = scale;
+    add_os(b, mb, target, b.fmt("snouty-tufty-{s}", .{cart.name}), &.{single}, &.{cart_bin(b, cart, false)}, false);
+}
+
+/// M2: the Tufty OS with every cart of `carts` embedded, behind the menu.
+fn add_arcade(b: *Build, mb: *MicroBuild, target: *microzig.Target) void {
+    var bins: [carts.len]Build.LazyPath = undefined;
+    for (carts, &bins) |c, *bin| bin.* = cart_bin(b, c, true);
+    add_os(b, mb, target, "snouty-tufty-arcade", &carts, &bins, true);
+}
+
+/// The menu facts of `list` as a module (`cart_meta`): parallel arrays
+/// `names`, `titles`, `blurbs` ("" = none) and `scales` (fit/crop/native).
+fn cart_meta(b: *Build, list: []const Cart) *Build.Step.Options {
+    const names = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
+    const titles = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
+    const blurb_list = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
+    const scales = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
+    for (list, 0..) |c, i| {
+        names[i] = c.name;
+        titles[i] = c.title orelse default_title(b, c.name);
+        blurb_list[i] = for (blurbs) |bl| {
+            if (std.mem.eql(u8, bl[0], c.name)) break bl[1];
+        } else "";
+        if (blurb_list[i].len > 32) std.debug.panic("blurb for {s} is over 32 characters", .{c.name});
+        scales[i] = @tagName(c.scale);
+    }
+    const meta = b.addOptions();
+    meta.addOption([]const []const u8, "names", names);
+    meta.addOption([]const []const u8, "titles", titles);
+    meta.addOption([]const []const u8, "blurbs", blurb_list);
+    meta.addOption([]const []const u8, "scales", scales);
+    return meta;
+}
+
+/// "snouty-run" -> "SNOUTY RUN".
+fn default_title(b: *Build, name: []const u8) []const u8 {
+    const t = b.allocator.dupe(u8, name) catch @panic("OOM");
+    for (t) |*ch| ch.* = if (ch.* == '-' or ch.* == '_') ' ' else std.ascii.toUpper(ch.*);
+    return t;
+}
+
+var flash_check_exe: ?*Build.Step.Compile = null;
+
+/// The host tool that checks a firmware UF2 against flash_limit (one,
+/// shared by every firmware).
+fn flash_check(b: *Build) *Build.Step.Compile {
+    if (flash_check_exe) |exe| return exe;
+    flash_check_exe = b.addExecutable(.{
+        .name = "flash_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/flash_check.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{.{
+                .name = "uf2_check",
+                .module = b.createModule(.{ .root_source_file = b.path("src/uf2_check.zig") }),
+            }},
+        }),
+    });
+    return flash_check_exe.?;
+}
+
+/// The Tufty OS with the carts `list` embedded (`list_bins`: their images,
+/// same order). `arcade`: boot into the menu, HOME returns to it. Otherwise
+/// boot the first (only) cart, HOME restarts it.
+fn add_os(
+    b: *Build,
+    mb: *MicroBuild,
+    target: *microzig.Target,
+    name: []const u8,
+    list: []const Cart,
+    list_bins: []const Build.LazyPath,
+    arcade: bool,
+) void {
+    // `cart_images`: the embedded images by index, so file names stay plain.
     const image_files = b.addWriteFiles();
-    _ = image_files.addCopyFile(cart_bin.getOutput(), "cart.bin");
-    const image_src = image_files.add("cart_image.zig",
-        \\//! Generated by build.zig: the embedded cart image.
-        \\pub const bytes: []const u8 = @embedFile("cart.bin");
-        \\
-    );
+    var src: std.ArrayList(u8) = .empty;
+    src.appendSlice(b.allocator, "//! Generated by build.zig: the embedded cart images, in `carts` order.\npub const images = [_][]const u8{\n") catch @panic("OOM");
+    for (list_bins, 0..) |bin, i| {
+        _ = image_files.addCopyFile(bin, b.fmt("cart{d}.bin", .{i}));
+        src.appendSlice(b.allocator, b.fmt("    @embedFile(\"cart{d}.bin\"),\n", .{i})) catch @panic("OOM");
+    }
+    src.appendSlice(b.allocator, "};\n") catch @panic("OOM");
+    const images_src = image_files.add("cart_images.zig", src.items);
 
     const options = b.addOptions();
     options.addOption(u32, "sys_mhz", 250);
-    options.addOption([]const u8, "cart_name", cart.name);
-    options.addOption([]const u8, "scale", @tagName(scale));
+    options.addOption(bool, "arcade", arcade);
 
     const fw = mb.add_firmware(.{
-        .name = b.fmt("snouty-tufty-{s}", .{cart.name}),
+        .name = name,
         .target = target,
         .optimize = .ReleaseSmall,
         .root_source_file = b.path("src/cart_host.zig"),
         .imports = &.{
             .{ .name = "build_options", .module = options.createModule() },
-            .{ .name = "cart_image", .module = b.createModule(.{ .root_source_file = image_src }) },
+            .{ .name = "cart_meta", .module = cart_meta(b, list).createModule() },
+            .{ .name = "cart_images", .module = b.createModule(.{ .root_source_file = images_src }) },
+            .{ .name = "font", .module = b.createModule(.{ .root_source_file = b.path("snouty-badge/sycl-badge/src/font.zig") }) },
+            .{ .name = "iris_mark", .module = b.createModule(.{ .root_source_file = b.path("snouty-badge/lib/iris_mark.zig") }) },
         },
     });
     install(mb, fw);
 
-    // Also install the cart ELF and image next to it, for inspection.
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(cart_elf, .{ .custom = "firmware/cart" }, b.fmt("{s}.elf", .{cart.binary})).step);
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(cart_bin.getOutput(), .{ .custom = "firmware/cart" }, b.fmt("{s}.bin", .{cart.binary})).step);
+    // Flash budget: fails the build with a clear message if the UF2 reaches
+    // flash_limit, and writes <name>.flash.txt next to it (range, budget
+    // used, the address of every embedded cart image in the UF2).
+    const check = b.addRunArtifact(flash_check(b));
+    check.addArg(name);
+    check.addFileArg(fw.get_emitted_bin(.{ .uf2 = .{ .family_id = .RP2350_ARM_S } }));
+    check.addArg(b.fmt("0x{X:0>8}", .{flash_limit}));
+    for (list, list_bins) |c, bin| {
+        check.addArg(c.name);
+        check.addFileArg(bin);
+    }
+    const report = check.captureStdOut(.{});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(report, .{ .custom = "firmware" }, b.fmt("{s}.flash.txt", .{name})).step);
 }
 
 /// The source of a file a dependency's build installs under

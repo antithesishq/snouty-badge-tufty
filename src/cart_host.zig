@@ -1,4 +1,6 @@
-/// Tufty OS, M1: runs one unmodified SYCL Badge RAM cart.
+/// Tufty OS: runs unmodified SYCL Badge RAM carts. M1 embeds one cart and
+/// boots it; M2 (the arcade, `build_options.arcade`) embeds every cart of
+/// build.zig's `carts` table and boots into a menu (menu.zig, arcade.zig).
 ///
 /// Core 0 (this file) is the OS: it copies the embedded cart image into
 /// cart RAM, starts core 1 at the cart's entry point exactly as the SYCL OS
@@ -11,7 +13,11 @@
 ///   - SYNC_TIME handshake (the cart's _start does it before start()).
 ///   - Tone, volume, trace, neopixels and the red LED are accepted and
 ///     ignored (the Tufty has no buzzer the carts could use).
-/// HOME: short press restarts the cart, held 1 s reboots into BOOTSEL.
+/// HOME: short press restarts the cart (single-cart build) or stops it and
+/// returns to the menu (arcade); held 1 s reboots into BOOTSEL.
+///
+/// Arcade menu: core 1 is held in reset, core 0 streams the menu to the
+/// panel column by column (no framebuffer) and redraws only on a change.
 ///
 /// RAM: the OS lives in 0x20000000..0x20020000 (the linker region is cut to
 /// 128 KB in build.zig). 0x20020000..0x20080000 is the cart's: IPC block,
@@ -22,7 +28,8 @@ const hal = microzig.hal;
 const fifo = hal.multicore.fifo;
 
 const build_options = @import("build_options");
-const cart_bytes: []const u8 = @import("cart_image").bytes;
+const cart_meta = @import("cart_meta");
+const cart_images = @import("cart_images").images;
 
 const clocks = @import("clocks.zig");
 const st7789 = @import("drivers/st7789.zig");
@@ -32,6 +39,8 @@ const scaler = @import("scaler.zig");
 const controls_map = @import("controls_map.zig");
 const abi = @import("os/abi.zig");
 const cart_image = @import("os/cart_image.zig");
+const arcade = @import("arcade.zig");
+const menu = @import("menu.zig");
 
 comptime {
     _ = microzig.export_startup();
@@ -39,10 +48,29 @@ comptime {
 
 pub const init = clocks.init;
 
-const cart_name = build_options.cart_name;
-const scale_mode: scaler.Mode = std.meta.stringToEnum(scaler.Mode, build_options.scale) orelse
-    @compileError("-Dscale must be fit, crop or native");
-const button_map: *const controls_map.Map = controls_map.for_cart(cart_name);
+/// One embedded cart: its image, scale mode and button map (by name, from
+/// controls_map.for_cart), as the generated table lists them.
+const Slot = struct {
+    bytes: []const u8,
+    scale: scaler.Mode,
+    map: *const controls_map.Map,
+};
+
+const cart_count = cart_images.len;
+
+const slots: [cart_count]Slot = blk: {
+    if (cart_count == 0 or cart_count > arcade.max_carts) @compileError("1..32 carts");
+    if (cart_meta.names.len != cart_count) @compileError("cart_meta and cart_images disagree");
+    var s: [cart_count]Slot = undefined;
+    for (&s, cart_images, cart_meta.names, cart_meta.scales) |*slot, bytes, name, scale| {
+        slot.* = .{
+            .bytes = bytes,
+            .scale = std.meta.stringToEnum(scaler.Mode, scale) orelse @compileError("scale must be fit, crop or native"),
+            .map = controls_map.for_cart(name),
+        };
+    }
+    break :blk s;
+};
 
 /// Button mapper state and the number of cart presents (pulse stretching
 /// counts presents, not OS loops).
@@ -70,37 +98,66 @@ fn ram(start: u32, end: u32) []u8 {
     return p[0 .. end - start];
 }
 
-/// Stops core 1, rebuilds cart RAM from the image and starts the cart.
-/// Used at boot and for a HOME restart.
-fn start_cart(info: cart_image.Info) void {
-    // Hold core 1 in reset while its RAM is rewritten.
+/// Stops the cart, leaving core 1 held in reset. Safe at any point of the
+/// cart's life, because core 0 only gets here between loop iterations:
+///   - The panel is idle. present() is synchronous on core 0 and ends with
+///     end_frame() (DMA channel 0 done, PIO stalled, CS high), so a stop
+///     never cuts a panel transfer.
+///   - Core 1 is forced off (PSM FRCE_OFF.PROC1) and stays off until the
+///     next launch_core1, which resets it again and runs the bootrom
+///     handshake.
+///   - DMA channels 1..15 (anything the cart started) are aborted, and the
+///     SIO spinlock its tracy code takes is freed.
+///   - The cart -> OS FIFO is drained and its sticky error flags cleared;
+///     a present the cart had queued is dropped (pending = null), so no
+///     FRAMEBUFFER_DONE is ever sent to a cart that is gone.
+fn stop_cart() void {
     microzig.chip.peripherals.PSM.FRCE_OFF.modify(.{ .PROC1 = 1 });
     while (microzig.chip.peripherals.PSM.FRCE_OFF.read().PROC1 != 1) {}
 
-    // Stop any DMA the cart left running (channel 0 is the panel's) and
-    // free the SIO spinlock its tracy code uses.
     // RP2350 CHAN_ABORT is at DMA + 0x464 (pico-sdk regs/dma.h; the SYCL
-    // OS's 0x444 is the RP2040 offset).
+    // OS's 0x444 is the RP2040 offset). Channel 0 is the panel's.
     const DMA_CHAN_ABORT: *volatile u32 = @ptrFromInt(0x5000_0464);
     DMA_CHAN_ABORT.* = 0xFFFE;
     while (DMA_CHAN_ABORT.* & 0xFFFE != 0) {}
     @as(*volatile u32, @ptrFromInt(abi.tracy_spinlock_addr)).* = 0;
 
+    fifo.drain();
+    // FIFO_ST: writing clears the sticky ROE (read on empty) / WOF (write
+    // on full) flags (RP2350 datasheet, SIO FIFO_ST).
+    microzig.chip.peripherals.SIO.FIFO_ST.write_raw(0xFF);
+
+    reset_present_state();
+}
+
+/// Stops whatever runs, rebuilds cart RAM from cart `index`'s image and
+/// starts it on core 1 with that cart's scale and button map. Used at boot,
+/// for a HOME restart and for every arcade launch.
+fn start_cart(index: u8) void {
+    const slot = &slots[index];
+    const info = infos[index] orelse return;
+
+    // Hold core 1 in reset while its RAM is rewritten.
+    stop_cart();
+
     // Fresh cart RAM: zero everything (IPC block, BSS, heap, stack), then
     // copy the image to its link address. BSS is zeroed again per the
     // descriptor, as the SYCL loader does.
     @memset(ram(abi.process_ram_start, abi.process_ram_end), 0);
-    @memcpy(ram(abi.cart_ram_origin, abi.cart_ram_origin + @as(u32, @intCast(cart_bytes.len))), cart_bytes);
+    @memcpy(ram(abi.cart_ram_origin, abi.cart_ram_origin + @as(u32, @intCast(slot.bytes.len))), slot.bytes);
     @memset(ram(info.bss_start, info.bss_end), 0);
 
-    mapper = .init(button_map);
+    maps = scaler.Maps.init(slot.scale);
+    // Black the panel first: a native-scale cart never draws the border,
+    // and a dirty-rect cart may never repaint all of it.
+    clear_panel();
+
+    mapper = .init(slot.map);
     presents = 0;
     const ipc = abi.ipc();
-    ipc.controls = @bitCast(mapper.update(buttons.read().bits() & 0x1F, system.micros(), presents));
+    ipc.controls = @bitCast(mapper.update(session.cart_buttons(buttons.read().bits()), system.micros(), presents));
     ipc.light_level = light_level_constant;
     ipc.battery_level = battery_level_constant;
-
-    reset_present_state();
 
     @as(*volatile u32, &cart_entry).* = info.entry_point;
     asm volatile ("dsb" ::: .{ .memory = true });
@@ -281,35 +338,91 @@ fn fail_screen(color: u16) noreturn {
     }
 }
 
+fn fail_color(err: cart_image.Error) u16 {
+    return switch (err) {
+        error.ImageTooLarge => 0x00F8, // red (big-endian RGB565)
+        error.NoDescriptor => 0xE0FF, // yellow
+        error.BadVersion => 0x1FF8, // magenta
+        error.BadBss, error.BadEntry => 0x1F00, // blue
+    };
+}
+
+/// Fills the whole panel with black.
+fn clear_panel() void {
+    st7789.begin_frame();
+    @memset(&column_bufs[0], 0);
+    for (0..st7789.width) |_| st7789.push(&column_bufs[0]);
+    st7789.end_frame();
+}
+
+/// Streams the menu (core 1 stopped, so core 0 owns the panel).
+fn draw_menu() void {
+    const view: menu.View = .{
+        .titles = cart_meta.titles,
+        .blurbs = cart_meta.blurbs,
+        .cursor = session.cursor,
+        .playable = session.playable,
+    };
+    var layout: menu.Layout = .{};
+    layout.build(&view);
+    st7789.begin_frame();
+    for (0..menu.width) |x| {
+        const buf = &column_bufs[x & 1];
+        menu.render_column(@intCast(x), &view, &layout, buf);
+        st7789.push(buf);
+    }
+    st7789.end_frame();
+}
+
+/// Validated image of every cart (null: unusable, never launched).
+var infos: [cart_count]?cart_image.Info = @splat(null);
+var session: arcade.Session = undefined;
+
+fn exec(cmd: arcade.Command) void {
+    switch (cmd) {
+        .none => {},
+        .redraw => draw_menu(),
+        .stop_to_menu => {
+            stop_cart();
+            draw_menu();
+        },
+        .launch => |i| start_cart(i),
+        .bootsel => system.reboot_to_bootsel(),
+    }
+}
+
 pub noinline fn main() void {
     system.power_on_peripherals();
     buttons.init();
     st7789.init(clocks.sys_freq);
     st7789.set_backlight(backlight_level);
-    maps = scaler.Maps.init(scale_mode);
 
-    const info = cart_image.validate(cart_bytes, abi.cart_ram_origin) catch |err| fail_screen(switch (err) {
-        error.ImageTooLarge => 0x00F8, // red (big-endian RGB565)
-        error.NoDescriptor => 0xE0FF, // yellow
-        error.BadVersion => 0x1FF8, // magenta
-        error.BadBss, error.BadEntry => 0x1F00, // blue
-    });
+    var playable: u32 = 0;
+    for (&slots, &infos, 0..) |*slot, *info, i| {
+        if (cart_image.validate(slot.bytes, abi.cart_ram_origin)) |ok| {
+            info.* = ok;
+            playable |= @as(u32, 1) << @intCast(i);
+        } else |err| {
+            // The single-cart build shows the error colour, as M1 did; the
+            // arcade dims the cart in the menu instead.
+            if (!build_options.arcade) fail_screen(fail_color(err));
+        }
+    }
 
-    start_cart(info);
+    session = .init(cart_count, build_options.arcade, playable);
+    exec(session.boot(buttons.read().bits()));
 
-    var home: system.HomeButton = .{};
     while (true) {
         const held = buttons.read();
-        abi.ipc().controls = @bitCast(mapper.update(held.bits() & 0x1F, system.micros(), presents));
+        const now = system.micros();
+        const was_running = session.screen == .cart;
 
-        switch (home.update(held.home, system.micros())) {
-            .none => {},
-            .short_press => {
-                start_cart(info);
-                continue;
-            },
-            .long_press => system.reboot_to_bootsel(),
-        }
+        // Controls first, as M1: the cart sees this loop's buttons.
+        if (was_running) abi.ipc().controls = @bitCast(mapper.update(session.cart_buttons(held.bits()), now, presents));
+
+        const cmd = session.update(held.bits(), held.home, now);
+        exec(cmd);
+        if (cmd != .none or session.screen != .cart) continue;
 
         while (fifo.read()) |msg| handle_message(msg);
         service_present(system.micros());

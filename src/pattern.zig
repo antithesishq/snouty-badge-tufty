@@ -103,8 +103,9 @@ fn box_index(x: u16) ?usize {
     return i;
 }
 
-/// Draws the column of one glyph-scaled text item that falls on x.
-fn text_column(t: Text, x: u16, fg_override: ?u16, out: []u16) void {
+/// Draws the column of one glyph-scaled text item that falls on x
+/// (`fg_override` replaces its colour). Also used by menu.zig.
+pub fn text_column(t: Text, x: u16, fg_override: ?u16, out: []u16) void {
     const span: u32 = @as(u32, @intCast(t.str.len)) * 8 * t.scale;
     if (x < t.x or x >= t.x + span) return;
     const rel = (x - t.x) / t.scale;

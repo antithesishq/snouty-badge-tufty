@@ -69,11 +69,19 @@ needed for the first ports.
   vsync pacing. First cart: snouty-bugs, built from the submodule with no
   changes. Gate: it runs in a host test of the scaler/ABI plus, on
   hardware, Adrian plays it.
-* **M2, the four picks.** snouty-maze, snouty-bugs, snoutenstein,
-  snouty-reflections in one UF2 with a picker menu (or one UF2 per cart if
-  the 2 MB slot gets tight). Per-cart button maps. Perf: the badge-bench
-  numbers are at 150 MHz; at 250 MHz everything has about 1.6x headroom.
-  Reflections can use the full scene variant instead of cut20.
+  Done with snouty-run (verified on the badge 2026-10-02), then demosnout.
+* **M2, arcade.** `snouty-tufty-arcade.uf2`: every cart in build.zig's
+  `carts` table in one UF2, behind a boot menu (UP/DOWN, C or A to play,
+  HOME back to the menu, HOME held = BOOTSEL). The scale and map are chosen
+  at run time, and the flash budget is checked at build time: everything
+  below 0x101C0000, with 0x101C0000..0x10200000 kept for a future XIP cart.
+  See [docs/ARCADE.md](docs/ARCADE.md). Gate: Adrian flashes it and
+  switches carts back and forth.
+* **M2.x, the four picks.** snouty-maze, snouty-bugs, snoutenstein,
+  snouty-reflections join the arcade (one table row and one button map
+  each). Perf: the badge-bench numbers are at 150 MHz; at 250 MHz
+  everything has about 1.6x headroom. Reflections can use the full scene
+  variant instead of cut20.
 * **M3, polish.** Per-cart scale mode, backlight from the light sensor,
   case LEDs, optional hi-res cart variants, and a MicroPython launcher
   stub, if one can chain-boot us.
