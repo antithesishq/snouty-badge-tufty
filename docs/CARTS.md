@@ -8,6 +8,7 @@ changes. `snouty-badge` main is never modified from here.
 |---|---|
 | cfe3046 | snouty-reflections: `tufty20` variant (full15's scene at 20 fps; docs/ports/snouty-reflections.md) |
 | 9cbf968 | `-Dbadge=tufty`: Tufty button names on screen (demosnout, snoutenstein, snouty-bugs) and a clock-seeded snouty-maze (below) |
+| ddd04fc | snouty-zero: with `-Dbadge=tufty` the title also takes A (the Tufty's C), and the PRESS cards say `PRESS C` (docs/ports/snouty-zero.md) |
 
 ## `-Dbadge=tufty`
 
@@ -36,6 +37,12 @@ On-screen strings, SYCL -> Tufty (they follow the maps in `ports/*.md`):
 | | pause (keys) | `UP/DOWN`, `LEFT/RIGHT`, `A`, `SELECT`, `HOLD B`, `BUMP DOOR`, `START` | `UP/DOWN`, `DOUBLE UP` (AUTO), `A/B`, `C`, `TAP UP+DN`, `HOLD A+B`, `BUMP DOOR`, `HOLD UP+DN`. One row more, so the panel is y 8..103 and its rows start at y 24 |
 | snouty-bugs | title | `A PLAY`, `B HARDCORE` | `C PLAY`, `A+B HARDCORE` |
 | | pause (keys) | `JOYSTICK`, `HOLD A`, `HOLD B`, `START` | `A/B UP/DN`, `TAP C`, `HOLD A+B`, `UP+DOWN`, with the columns at x 16/96 (were 20/92) |
+| snouty-zero | title, results, Grand Prix standings | `PRESS START` | `PRESS C`; the title also takes A (it took only Start; the results and standings already took A) |
+
+snouty-zero (ddd04fc against 9cbf968, `-Dcart=snouty-zero -Dcart-mode=xip`):
+the SYCL XIP ELF's loadable bytes, every non-debug section and its UF2 are
+byte-identical, and so are the .wasm code and data sections. The Tufty
+build's `.text` is 4 bytes shorter.
 
 Before and after, as badge-bench frames (SYCL left, Tufty right):
 [snoutenstein title + pause](ports/tufty-labels-snoutenstein.png),

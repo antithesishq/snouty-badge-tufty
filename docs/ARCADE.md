@@ -107,6 +107,8 @@ pub const snouty_bugs: Map = .{ .bindings = &.{ ... } };
 * The optional blurb (the controls line in the menu, up to 32 characters)
   goes in the `blurbs` table below `carts`, keyed by name.
 * A cart without its own map gets `controls_map.default`.
+* `xip = true` marks an execute-in-place cart (one per firmware, next
+  section).
 
 The row order is the menu order. The cart is then in the arcade, and
 `-Dcart=<name>` builds it alone. Check the flash report afterwards (next
@@ -117,7 +119,7 @@ section).
 | Range | Use |
 |---|---|
 | 0x10000000..0x101C0000 (1792 KB) | the firmware: Tufty OS, menu, and every cart image (the budget) |
-| 0x101C0000..0x10200000 (256 KB) | the XIP cart window: empty, or the one XIP cart (below) |
+| 0x101C0000..0x10200000 (256 KB) | the XIP cart window: the one XIP cart, snouty-zero (193 KB; below) |
 | 0x10200000.. | the badge's ROMFS and FAT drive. Never touched |
 
 ### One XIP cart in the arcade
@@ -136,12 +138,22 @@ keeps a row out of the arcade, and `.rom_drive` (snouty-genesis' FAT12
 drive at 0x10080000, which overlaps the RAM carts) is single-cart only.
 See [ports/snouty-genesis.md](ports/snouty-genesis.md).
 
+The arcade's XIP row is **snouty-zero** (the Mode 7 racer, XIP-only since
+its M5; [ports/snouty-zero.md](ports/snouty-zero.md)): 197,716 bytes at
+0x101C0000..0x101F0454, 59 KB of the window spare. It is the last menu
+entry. Another XIP cart can only replace it (one window), and snouty-genesis
+stays single-cart (its drive). `-Dcart=snouty-zero` builds the same cart
+alone as `snouty-tufty-snouty-zero.uf2`.
+
 The build enforces this. After each cart-host firmware build,
 `tools/flash_check.zig` checks the UF2:
 
-* every block is RP2350_ARM_S main flash inside 0x10000000..0x101C0000
+* every block is RP2350_ARM_S main flash inside 0x10000000..0x101C0000,
+  except the XIP cart's, which must sit at 0x101C0000 and end below
+  0x10200000
 * so there is no `0x10ffff00` absolute block
-* every cart image is in the payload byte for byte
+* every cart image is in the payload byte for byte (the XIP image at its
+  link address)
 
 If a check fails, the build fails with an error that names the address,
 for example:
@@ -153,27 +165,39 @@ error: flash budget: snouty-tufty-arcade.uf2 reaches 0x101C0100 (block ...), pas
 The linker's 2 MB flash region is a second, hard stop at 0x10200000.
 
 The report is installed next to each UF2 as
-`zig-out/firmware/<name>.flash.txt`. On 2026-10-02 the arcade
-(snouty-run + demosnout) reported:
+`zig-out/firmware/<name>.flash.txt`. On 2026-10-02 the arcade (seven RAM
+carts and snouty-zero) reported:
 
 ```
 snouty-tufty-arcade.uf2
-  1006 blocks, family 0xe48bff59 (RP2350_ARM_S), all main flash
-  flash   0x10000000..0x1003EE00  257536 bytes (251.5 KB)
-  budget  0x10000000..0x101C0000  1835008 bytes (1792 KB): 14.0% used, 1577472 bytes (1540.5 KB) free
-  0x101C0000..0x10200000 (reserved for an XIP cart) and everything above: untouched
-  cart images (byte-identical in the UF2 payload):
-    snouty-run           0x10002646..0x10027C6A  153124 bytes (149.5 KB)
-    demosnout            0x10027C6B..0x1003DC07  90012 bytes (87.9 KB)
-  carts 243136 bytes (237.4 KB), OS + tables 14400 bytes (14.1 KB)
+  3402 blocks, family 0xe48bff59 (RP2350_ARM_S), all main flash
+  flash   0x10000000..0x101F0500  2032896 bytes (1985.3 KB)
+  budget  0x10000000..0x101C0000  1835008 bytes (1792 KB): 36.7% used, 1161984 bytes (1134.8 KB) free (outside the cart window)
+  the XIP cart window 0x101C0000..0x10200000 holds the XIP cart
+  0x10200000 and everything above (the badge's ROMFS and FAT drive): untouched
+  images (@: required at that address) (byte-identical in the UF2 payload):
+    snouty-run           0x10002832..0x10027E56  153124 bytes (149.5 KB)
+    demosnout            0x10027E57..0x1003DDEB  90004 bytes (87.9 KB)
+    snoutenstein         0x1003DDEC..0x10056528  100156 bytes (97.8 KB)
+    snouty-bugs          0x10056529..0x100645C5  57500 bytes (56.2 KB)
+    snouty-reflections   0x100645C6..0x1007F3A6  110048 bytes (107.5 KB)
+    snouty-maze          0x1007F3A7..0x10090BE7  71744 bytes (70.1 KB)
+    snouty-flyover       0x10090BE8..0x100A2880  72856 bytes (71.1 KB)
+    snouty-zero          0x101C0000..0x101F0454  197716 bytes (193.1 KB), at its required address
 ```
 
-The OS, the menu and the tables cost about 14 KB, and each cart costs its
+The `flash` line spans the gap: 2,629 blocks end at 0x100A4500 (the OS and
+the seven RAM carts, 657 KB), nothing is written in
+0x100A4500..0x101C0000, and 773 blocks fill 0x101C0000..0x101F0500.
+
+The OS, the menu and the tables cost about 14 KB, and each RAM cart costs its
 image size. The image size is its `.text` + `.data`. BSS costs no flash, so
-demosnout's 174 KB `.bss` takes none.
+demosnout's 174 KB `.bss` takes none. The XIP cart costs nothing below
+0x101C0000.
 
 The [port notes](ports/README.md) give the sizes of the other four carts
 (`.text` + `.data`): snouty-bugs ~56 KB, snouty-maze ~70 KB,
 snoutenstein ~98 KB, snouty-reflections ~108 KB (tufty20), and
-snouty-flyover ~71 KB. With all seven carts the arcade comes to 655 KB of
-the 1792 KB budget (36.6%).
+snouty-flyover ~71 KB. With all seven RAM carts the arcade comes to 657 KB
+of the 1792 KB budget (36.7%), and snouty-zero fills 193 KB of the 256 KB
+window.

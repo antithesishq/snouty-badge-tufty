@@ -90,6 +90,16 @@ needed for the first ports.
   vector table, as the SYCL OS does. Single-cart only: the arcade already
   reaches past 0x10080000. See [docs/ports/snouty-genesis.md](docs/ports/snouty-genesis.md).
   Gate: Adrian flashes it and plays Green Hill Zone.
+* **M2.z, the arcade's XIP cart: snouty-zero.** The Mode 7 racer (XIP-only
+  since its M5) is the last arcade entry, packed at 0x101C0000 beside the
+  seven RAM carts, and builds alone as `snouty-tufty-snouty-zero.uf2`. C
+  latches the throttle, A/B steer, UP Overclock, DOWN brake, A+B rewind,
+  UP+DOWN pause (UP/DOWN 60 ms chord-delayed, a new per-binding
+  `chord_ms`). One cart change on the `tufty` branch (ddd04fc): the title
+  takes A and the cards say `PRESS C`. 4.52 ms worst at 150 MHz on the Tufty
+  map, ~2.7 ms at 250, if XIP stalls hold. See
+  [docs/ports/snouty-zero.md](docs/ports/snouty-zero.md). Gate: Adrian
+  flashes the arcade and races.
 * **M3, polish.** Per-cart scale mode, backlight from the light sensor,
   case LEDs, optional hi-res cart variants, and a MicroPython launcher
   stub, if one can chain-boot us.

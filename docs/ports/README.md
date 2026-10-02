@@ -12,6 +12,7 @@ separately.
 | [snouty-maze](snouty-maze.md) | 60 fps screensaver with optional walking. No chords: C tap = skip, C hold = name strip. Fit; 11.4 ms worst becomes ~6.8 ms, so a 16x16 maze fits |
 | [demosnout](demosnout.md) | 60 fps demo. A/B/C/UP/DOWN map 1:1 onto a/b/select/up/down. Crop; 5.6 ms worst becomes ~3.3 ms. Largest `.bss` (174.5 KB) |
 | [snouty-genesis](snouty-genesis.md) | Genesis emulator, the first XIP cart: its own UF2 (`snouty-tufty-genesis.uf2`) with the cart at 0x101C0000 and a FAT12 drive holding the ROM (`-Dgenesis_rom`, Sonic 1) at 0x10080000; no cart change. A+B = B (left-thumb jump), UP+DOWN tap = Start, hold = the emulator menu. Fit; Miniplanets 29.1 ms worst at 150 MHz becomes ~17.5 ms vs 33.3, if XIP stalls hold |
+| [snouty-zero](snouty-zero.md) | 60 fps Mode 7 racer, XIP-only: the arcade's one XIP cart (0x101C0000) and `snouty-tufty-snouty-zero.uf2`. A press of C latches the throttle (bugs' autofire latch; later presses confirm in menus), so the left thumb steers on A/B and the right works UP (Overclock) / DOWN (brake). A+B = rewind, UP+DOWN = pause, with UP/DOWN 60 ms chord-delayed so pausing never fires an Overclock. Title says `PRESS C` (`tufty` ddd04fc). Fit; 4.75 ms worst becomes ~2.9 ms, if XIP stalls hold |
 | [snouty-reflections](snouty-reflections.md) | Ray tracer. Ported with the `tufty20` variant (full15's full scene at 20 fps, on the submodule's `tufty` branch, docs/CARTS.md): 65.7 ms worst at 150 MHz on all four presets, ~39.4 ms at 250 vs 47. full20 is still over (~54 ms). Crop |
 
 ## Layout assumption: the split d-pad
@@ -38,7 +39,9 @@ See the fallback in snouty-bugs.md.
 * **chord X+Y**: while both are held, set the chord's bits and mask the direct
   bits of X and Y. Per cart, `chord_ms` delays the direct bits of chord
   members so a chord can form without leaking. 0 suits twitch carts (a
-  one-frame leak); 60 suits reflections.
+  one-frame leak); 60 suits reflections. A binding's own `chord_ms`
+  overrides the map's, so only the members whose leak matters wait
+  (snouty-zero: UP and DOWN wait 60 ms, A/B steer at once).
 * **tap / hold**: on a button or chord, emit a pulse bit on release before
   `hold_ms` (tap), or once held for `hold_ms` (hold).
 * **Pulses** last at least 2 cart presents, not 2 OS ticks. Reflections runs
@@ -90,6 +93,7 @@ See the fallback in snouty-bugs.md.
 | reflections full20 | 47.0 | 90.48 / 68.47 | 54.3 / 41.1 (over) |
 | reflections full15 | 62.7 | 64.83 / 60.63 | 38.9 / 36.4 |
 | **reflections tufty20 (shipped)** | 47.0 | 65.72 / 49.98 (all presets) | 39.4 / 30.0 |
+| snouty-zero (XIP, Tufty map) | 16.7 | 4.75 / 2.43 | 2.9 / 1.5 (if XIP stalls scale) |
 
 Each cart file gives the source of its numbers. The re-runs on 2026-10-02
 were made on ELFs built from the submodule in a scratch directory; the
