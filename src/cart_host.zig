@@ -19,6 +19,11 @@
 /// Arcade menu: core 1 is held in reset, core 0 streams the menu to the
 /// panel column by column (no framebuffer) and redraws only on a change.
 ///
+/// Dual-boot build (`build_options.supabase`, docs/DUALBOOT.md): the same
+/// arcade, run from the flash gap beside the badge's Supabase MicroPython
+/// firmware. Its menu has one more row, SUPABASE BADGE, that reboots into
+/// the normal boot path (MicroPython).
+///
 /// RAM: the OS lives in 0x20000000..0x20020000 (the linker region is cut to
 /// 128 KB in build.zig). 0x20020000..0x20080000 is the cart's: IPC block,
 /// then the cart image at 0x20035100, its BSS/heap, its stack at the top.
@@ -70,6 +75,18 @@ const Slot = struct {
 };
 
 const cart_count = cart_images.len;
+
+/// Dual-boot build: the exit row after the carts (other builds have no
+/// `supabase` option).
+const supabase = @hasDecl(build_options, "supabase") and build_options.supabase;
+const exit_title = "SUPABASE BADGE";
+const exit_blurb = "REBOOT INTO THE SUPABASE BADGE";
+const menu_titles: []const []const u8 = if (supabase) cart_meta.titles ++ [_][]const u8{exit_title} else cart_meta.titles;
+const menu_blurbs: []const []const u8 = if (supabase) cart_meta.blurbs ++ [_][]const u8{exit_blurb} else cart_meta.blurbs;
+comptime {
+    if (menu_titles.len > arcade.max_carts) @compileError("at most 32 menu rows");
+    if (exit_title.len > menu.max_title_2x or exit_blurb.len > menu.max_blurb) @compileError("exit row text too long");
+}
 
 const slots: [cart_count]Slot = blk: {
     if (cart_count == 0 or cart_count > arcade.max_carts) @compileError("1..32 carts");
@@ -430,10 +447,11 @@ fn clear_panel() void {
 /// Streams the menu (core 1 stopped, so core 0 owns the panel).
 fn draw_menu() void {
     const view: menu.View = .{
-        .titles = cart_meta.titles,
-        .blurbs = cart_meta.blurbs,
+        .titles = menu_titles,
+        .blurbs = menu_blurbs,
         .cursor = session.cursor,
-        .playable = session.playable,
+        // The exit row is never drawn dimmed.
+        .playable = session.playable | if (supabase) @as(u32, 1) << cart_count else 0,
     };
     var layout: menu.Layout = .{};
     layout.build(&view);
@@ -460,6 +478,7 @@ fn exec(cmd: arcade.Command) void {
         },
         .launch => |i| start_cart(i),
         .bootsel => system.reboot_to_bootsel(),
+        .exit => system.reboot_normal(),
     }
 }
 
@@ -482,6 +501,7 @@ pub noinline fn main() void {
     }
 
     session = .init(cart_count, build_options.arcade, playable);
+    session.exit_row = supabase;
     exec(session.boot(buttons.read().bits()));
 
     while (true) {

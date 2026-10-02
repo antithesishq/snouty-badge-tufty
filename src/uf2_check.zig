@@ -35,6 +35,7 @@ pub const Problem = enum {
     no_family,
     wrong_family,
     below_flash,
+    below_start,
     past_limit,
 
     pub fn text(p: Problem) []const u8 {
@@ -46,6 +47,7 @@ pub const Problem = enum {
             .no_family => "block has no family ID",
             .wrong_family => "family is not RP2350_ARM_S (0xe48bff59)",
             .below_flash => "target below flash (0x10000000)",
+            .below_start => "target below the start of the allowed range",
             .past_limit => "target reaches the flash limit",
         };
     }
@@ -83,6 +85,13 @@ pub fn parse_block(blk: *const [block_size]u8) ?Block {
 
 /// Checks every block of `uf2` against `limit` (exclusive end address).
 pub fn check(uf2: []const u8, limit: u32) Result {
+    return check_range(uf2, flash_base, limit);
+}
+
+/// Checks every block of `uf2` against the flash range start..limit (the
+/// dual-boot build's gap, docs/DUALBOOT.md). A block below `start` (but in
+/// flash) is `below_start`.
+pub fn check_range(uf2: []const u8, start: u32, limit: u32) Result {
     if (uf2.len == 0 or uf2.len % block_size != 0) return .{ .bad = .{ .block = 0, .addr = 0, .end = 0, .problem = .not_block_aligned } };
     var s: Summary = .{};
     var i: u32 = 0;
@@ -100,6 +109,8 @@ pub fn check(uf2: []const u8, limit: u32) Result {
             .wrong_family
         else if (blk.addr < flash_base)
             .below_flash
+        else if (blk.addr < start)
+            .below_start
         else if (end > limit)
             .past_limit
         else

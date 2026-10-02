@@ -1,5 +1,9 @@
 # Deploying to the Tufty badge
 
+To keep the Supabase firmware and add the arcade beside it, see
+[DUALBOOT.md](DUALBOOT.md) instead. Its UF2 never writes MicroPython's
+region. This page covers the UF2s that replace the firmware.
+
 The badge runs Supabase's MicroPython build. Our firmware replaces that
 firmware, but only within the first 2 MB of flash, which is the
 MicroPython firmware slot. The badge's apps and files live above that, in

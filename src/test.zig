@@ -11,4 +11,6 @@ test {
     _ = @import("uf2_check.zig");
     _ = @import("uf2_pack.zig");
     _ = @import("fat12_image.zig");
+    _ = @import("dualboot/layout.zig");
+    _ = @import("dualboot/pack.zig");
 }

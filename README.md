@@ -12,6 +12,9 @@ therefore run on core 1 with the Tufty's screen and buttons.
 * [docs/DEPLOY.md](docs/DEPLOY.md): back up the badge, flash, restore
 * [docs/ARCADE.md](docs/ARCADE.md): the arcade UF2 (every cart behind a
   boot menu), how to add a cart, the flash budget
+* [docs/DUALBOOT.md](docs/DUALBOOT.md): the arcade as a dual boot beside the
+  badge's own Supabase MicroPython firmware, with its launcher app
+  (`supabase-app/`)
 * [docs/ports/](docs/ports/README.md): per-cart port notes and button maps
 * [docs/CARTS.md](docs/CARTS.md): Tufty-only cart changes (the submodule's `tufty` branch)
 
@@ -25,6 +28,8 @@ zig build menu-png   # docs/arcade-menu.png, the menu as the panel shows it
 The main outputs:
 
 * `snouty-tufty-arcade.uf2`: all carts with a menu (M2)
+* `snouty-tufty-arcade-supabase.uf2`: the same arcade beside MicroPython;
+  it writes only the free flash gap 0x1014F000..0x10200000
 * `snouty-tufty-<cart>.uf2`: one cart, picked with `-Dcart=` (M1)
 * `snouty-tufty-hello.uf2`: the M0 test screen
 
