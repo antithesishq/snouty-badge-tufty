@@ -51,7 +51,7 @@ applied input (`prev_in`). The simulation is in `sim.zig` (`step`,
 | playing | B (edge, then held) | Rewind while held, until the meter runs out |
 | playing | Start (edge) | Pause |
 | paused | Start (edge) | Resume |
-| dead | B (edge) | Rewind out of death (at least a 3 s reserve). Held 60 frames with no history: restart the level |
+| dead | B (edge) | Rewind out of death (at least a 3 s reserve). Leaving it alive revives you: 2 s without damage, HP at least 25 (HP and portrait frame blink purple; since tufty 7834448). Held 60 frames with no history: restart the level |
 | rewinding | B released | Commit. Everything else is ignored |
 | intermission/victory | A or Start (edge, after 1 s) | Skip the card. It also auto-advances |
 
