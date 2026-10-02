@@ -189,9 +189,26 @@ pub const snouty_run: Map = .{
     },
 };
 
+/// demosnout (docs/ports/demosnout.md) reads only press edges: in the show
+/// Select opens the picker, A/Start skips, B toggles hold; in the picker
+/// Up/Down move, A jumps, B/Select close. The Tufty labels match the cart's
+/// A and B, C is Select. Start (a duplicate of A) and Left/Right/click are
+/// never sent, so the cart's Start+Select ignore-everything branch can never
+/// trigger. No chords.
+pub const demosnout: Map = .{
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.a) },
+        .{ .on = btn(.b), .held = bit(.b) },
+        .{ .on = btn(.c), .held = bit(.select) },
+        .{ .on = btn(.up), .held = bit(.up) },
+        .{ .on = btn(.down), .held = bit(.down) },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-run")) return &snouty_run;
+    if (std.mem.eql(u8, name, "demosnout")) return &demosnout;
     return &default;
 }
 
@@ -315,6 +332,60 @@ test "tap and hold on a chord" {
     try testing.expectEqual(bit(.start), out);
     // Release after a hold: start drops (its rise was long ago), no tap pulse.
     try testing.expectEqual(@as(u16, 0), h.step(0, 16));
+}
+
+test "demosnout: one control per button, 1:1" {
+    try testing.expectEqual(&demosnout, for_cart("demosnout"));
+    const cases = [_]struct { Button, u16 }{
+        .{ .a, bit(.a) },
+        .{ .b, bit(.b) },
+        .{ .c, bit(.select) },
+        .{ .up, bit(.up) },
+        .{ .down, bit(.down) },
+    };
+    for (cases) |c| {
+        var s: Sim = .{ .m = .init(&demosnout) };
+        // No chord delay: the bit is there on the press itself.
+        try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+    }
+}
+
+test "demosnout: never start, never the exit chord, nothing masked" {
+    // Every combination of the five buttons, held for a while: the output is
+    // exactly the union of the direct bits (no chord masks anything), never
+    // contains start, left, right or click, so start+select never forms.
+    const forbidden = bit(.start) | bit(.left) | bit(.right) | bit(.click);
+    for (0..32) |combo_usize| {
+        const combo: u8 = @intCast(combo_usize);
+        var expect: u16 = 0;
+        if (combo & btn(.a) != 0) expect |= bit(.a);
+        if (combo & btn(.b) != 0) expect |= bit(.b);
+        if (combo & btn(.c) != 0) expect |= bit(.select);
+        if (combo & btn(.up) != 0) expect |= bit(.up);
+        if (combo & btn(.down) != 0) expect |= bit(.down);
+        var s: Sim = .{ .m = .init(&demosnout) };
+        var out: u16 = 0;
+        for (0..10) |_| {
+            out = s.step(combo, 16);
+            try testing.expectEqual(@as(u16, 0), out & forbidden);
+        }
+        try testing.expectEqual(expect, out);
+    }
+}
+
+test "demosnout: a quick tap of C still opens the picker" {
+    // The cart reads press edges once per update; a tap shorter than one
+    // present is stretched over 2 presents, so update() sees the edge.
+    var s: Sim = .{ .m = .init(&demosnout) };
+    _ = s.step(0, 16);
+    s.t += 3 * ms;
+    try testing.expectEqual(bit(.select), s.m.update(btn(.c), s.t, s.presents));
+    s.t += 3 * ms;
+    try testing.expectEqual(bit(.select), s.m.update(0, s.t, s.presents));
+    try testing.expectEqual(bit(.select), s.step(0, 16));
+    try testing.expectEqual(@as(u16, 0), s.step(0, 16));
 }
 
 test "control bits match the SYCL Controls layout" {

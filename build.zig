@@ -2,7 +2,8 @@
 //!
 //!   zig build                     firmware into zig-out/firmware/
 //!   zig build -Dcart=snouty-run   pick the cart the Tufty OS embeds
-//!   zig build -Dscale=crop        cart scale mode: fit (default), crop, native
+//!   zig build -Dscale=crop        cart scale mode: fit, crop, native (default per
+//!                                 cart: fit for snouty-run, crop for demosnout)
 //!   zig build test                host unit tests
 //!
 //! Firmware outputs (ELF + UF2, family RP2350_ARM_S, all below 0x10200000):
@@ -26,17 +27,19 @@ const MicroBuild = microzig.MicroBuild(.{
 });
 
 /// Carts the Tufty OS knows. `name` is the -Dcart name (the directory under
-/// snouty-badge/carts/), `binary` the firmware name its build installs.
-const Cart = struct { name: []const u8, binary: []const u8 };
+/// snouty-badge/carts/), `binary` the firmware name its build installs,
+/// `scale` the cart's default scale mode (-Dscale overrides it).
+const Cart = struct { name: []const u8, binary: []const u8, scale: Scale = .fit };
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
+    .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
 };
 
 const Scale = enum { fit, crop, native };
 
 pub fn build(b: *Build) void {
     const cart_name = b.option([]const u8, "cart", "Cart for the Tufty OS image (default snouty-run)") orelse "snouty-run";
-    const scale = b.option(Scale, "scale", "Cart scale mode: fit (128->240 rows, default), crop (2x, drop 4 rows top and bottom), native (1:1 centred)") orelse .fit;
+    const scale_option = b.option(Scale, "scale", "Cart scale mode: fit (128->240 rows), crop (2x, drop 4 rows top and bottom), native (1:1 centred). Default: per cart (fit unless the carts table says otherwise)");
 
     const mz_dep = b.dependency("microzig", .{});
     const mb = MicroBuild.init(b, mz_dep) orelse return;
@@ -53,8 +56,8 @@ pub fn build(b: *Build) void {
 
     const cart = for (carts) |c| {
         if (std.mem.eql(u8, c.name, cart_name)) break c;
-    } else std.debug.panic("-Dcart: unknown cart '{s}' (known: snouty-run)", .{cart_name});
-    add_cart_host(b, mb, tufty_target, cart, scale);
+    } else std.debug.panic("-Dcart: unknown cart '{s}' (known: snouty-run, demosnout)", .{cart_name});
+    add_cart_host(b, mb, tufty_target, cart, scale_option orelse cart.scale);
 
     // Host tests: the pure pixel / pattern / ABI code, no microzig.
     const unit_tests = b.addTest(.{
