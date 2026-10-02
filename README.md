@@ -1,7 +1,9 @@
-# snouty-tufty
+# snouty-badge-tufty
 
 The Snouty carts on the Supabase Select 2026 badge, a Pimoroni Badgeware
 Tufty 2350 (RP2350B, 320x240 LCD, five buttons).
+
+Caution! This repo is a fun side project and I make no guarantees about performance or stability. These are working great on my hardware, but flash at your own risk!
 
 The carts come from [snouty-badge](https://github.com/antithesishq/snouty-badge),
 which is a git submodule here. This repo adds a small Zig "Tufty OS" that
