@@ -9,4 +9,6 @@ test {
     _ = @import("arcade.zig");
     _ = @import("menu.zig");
     _ = @import("uf2_check.zig");
+    _ = @import("dualboot/layout.zig");
+    _ = @import("dualboot/pack.zig");
 }

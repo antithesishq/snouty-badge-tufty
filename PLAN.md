@@ -85,6 +85,11 @@ needed for the first ports.
 * **M3, polish.** Per-cart scale mode, backlight from the light sensor,
   case LEDs, optional hi-res cart variants, and a MicroPython launcher
   stub, if one can chain-boot us.
+  Done for the launcher as a dual boot (2026-10-02, host-tested, not yet
+  on hardware): `snouty-tufty-arcade-supabase.uf2` lives in the flash gap
+  beside MicroPython, a Badgeware app reboots into it through the bootrom's
+  RAM_IMAGE boot and `chain_image()`, and a menu row reboots back. See
+  [docs/DUALBOOT.md](docs/DUALBOOT.md).
 
 ## Open questions (defaulted)
 

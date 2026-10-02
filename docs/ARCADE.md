@@ -77,6 +77,10 @@ is only drawn with core 1 stopped. The drawing is host-tested in
 The single-cart build uses the same code with a one-row table and
 `arcade = false`: it boots straight into the cart, and HOME restarts it.
 
+The dual-boot build ([DUALBOOT.md](DUALBOOT.md)) is this arcade, run from
+the flash gap beside the badge's MicroPython. It has one more menu row,
+SUPABASE BADGE, which reboots into MicroPython (`Command.exit`).
+
 If a cart image fails validation (descriptor, version, BSS, entry), the
 arcade dims that row and shows "BAD CART IMAGE", and it never launches. The
 single-cart build shows the M1 solid-colour error screen.

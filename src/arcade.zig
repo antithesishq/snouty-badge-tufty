@@ -11,6 +11,10 @@
 ///         highlighted; single-cart build -> restart the cart.
 ///   any   HOME held 1 s: BOOTSEL.
 ///
+/// The dual-boot build (docs/DUALBOOT.md) sets `exit_row`: one more menu row
+/// after the carts, which A or C turns into `.exit` (reboot into the badge's
+/// own firmware) instead of a launch.
+///
 /// A button that is down when a cart launches (the A or C that launched it)
 /// is masked from the cart until it is released, so the cart never starts
 /// with a press already in flight. Buttons down when the menu comes back
@@ -48,11 +52,16 @@ pub const Command = union(enum) {
     launch: u8,
     /// Reboot into the bootrom's USB mode.
     bootsel,
+    /// Leave the arcade: reboot into the normal boot path, i.e. the badge's
+    /// own firmware (dual-boot build, the exit row).
+    exit,
 };
 
 pub const Session = struct {
     count: u8,
     arcade: bool,
+    /// One more menu row after the carts (row `count`) that exits.
+    exit_row: bool = false,
     /// Bit i set: cart i has a valid image and may launch.
     playable: u32,
     screen: Screen,
@@ -83,6 +92,11 @@ pub const Session = struct {
         if (s.arcade) return .redraw;
         s.last = 0;
         return .{ .launch = 0 };
+    }
+
+    /// Menu rows: the carts, then the exit row if there is one.
+    pub fn rows(s: *const Session) u8 {
+        return s.count + @intFromBool(s.exit_row);
     }
 
     pub fn is_playable(s: *const Session, i: u8) bool {
@@ -117,6 +131,7 @@ pub const Session = struct {
         const live = held & ~s.stale;
         const pressed = live & ~s.prev;
 
+        if (pressed & (btn_a | btn_c) != 0 and s.exit_row and s.cursor == s.count) return .exit;
         if (pressed & (btn_a | btn_c) != 0 and s.is_playable(s.cursor)) {
             s.screen = .{ .cart = s.cursor };
             s.last = s.cursor;
@@ -136,10 +151,11 @@ pub const Session = struct {
                 break :blk true;
             } else false;
             if (step_now) {
+                const n = s.rows();
                 s.cursor = if (dir == btn_up)
-                    (if (s.cursor == 0) s.count - 1 else s.cursor - 1)
+                    (if (s.cursor == 0) n - 1 else s.cursor - 1)
                 else
-                    (if (s.cursor + 1 == s.count) 0 else s.cursor + 1);
+                    (if (s.cursor + 1 == n) 0 else s.cursor + 1);
                 return .redraw;
             }
         }
@@ -173,6 +189,7 @@ const Rig = struct {
     stops: u32 = 0,
     menu_draws: u32 = 0,
     bootsel: bool = false,
+    exits: u32 = 0,
 
     fn init(count: u8, arcade: bool, playable: u32) Rig {
         var r: Rig = .{ .s = .init(count, arcade, playable) };
@@ -198,6 +215,10 @@ const Rig = struct {
                 r.launches += 1;
             },
             .bootsel => r.bootsel = true,
+            .exit => {
+                std.debug.assert(r.running == null);
+                r.exits += 1;
+            },
         }
     }
 
@@ -348,4 +369,60 @@ test "menu ignores buttons while HOME is down" {
     try testing.expectEqual(@as(?u8, null), r.running);
     r.hold(0, false, 20);
     try testing.expectEqual(Screen.menu, r.s.screen);
+}
+
+fn with_exit(count: u8, playable: u32) Rig {
+    var r: Rig = .{ .s = .init(count, true, playable) };
+    r.s.exit_row = true;
+    r.exec(r.s.boot(0));
+    return r;
+}
+
+test "the exit row is the last row and the cursor wraps through it" {
+    var r = with_exit(2, 0b11);
+    try testing.expectEqual(@as(u8, 3), r.s.rows());
+    r.tap(btn_up);
+    try testing.expectEqual(@as(u8, 2), r.s.cursor);
+    r.tap(btn_down);
+    try testing.expectEqual(@as(u8, 0), r.s.cursor);
+    r.tap(btn_down);
+    r.tap(btn_down);
+    try testing.expectEqual(@as(u8, 2), r.s.cursor);
+    // Without it the cursor never reaches row `count`.
+    var plain: Rig = .init(2, true, 0b11);
+    plain.tap(btn_up);
+    try testing.expectEqual(@as(u8, 1), plain.s.cursor);
+}
+
+test "A or C on the exit row exits, and never launches" {
+    for ([_]u8{ btn_a, btn_c }) |b| {
+        var r = with_exit(2, 0b11);
+        r.tap(btn_up);
+        r.tap(b);
+        try testing.expectEqual(@as(u32, 1), r.exits);
+        try testing.expectEqual(@as(u32, 0), r.launches);
+        try testing.expectEqual(@as(?u8, null), r.running);
+    }
+}
+
+test "with an exit row, carts still launch and HOME still comes back and still reaches BOOTSEL" {
+    var r = with_exit(3, 0b111);
+    r.tap(btn_down);
+    r.tap(btn_c);
+    try testing.expectEqual(@as(?u8, 1), r.running);
+    r.home_tap();
+    try testing.expectEqual(Screen.menu, r.s.screen);
+    try testing.expectEqual(@as(u8, 1), r.s.cursor);
+    // From the exit row, HOME held 1 s is BOOTSEL, not an exit.
+    r.tap(btn_down);
+    r.tap(btn_down);
+    try testing.expectEqual(@as(u8, 3), r.s.cursor);
+    r.hold(0, true, 1100);
+    try testing.expect(r.bootsel);
+    try testing.expectEqual(@as(u32, 0), r.exits);
+    // A held HOME blocks the menu, the exit row included.
+    var h = with_exit(1, 0b1);
+    h.tap(btn_down);
+    h.hold(btn_c, true, 50);
+    try testing.expectEqual(@as(u32, 0), h.exits);
 }
