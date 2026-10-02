@@ -57,7 +57,7 @@ const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
     .{ .name = "demosnout", .binary = "demosnout", .scale = .crop },
     .{ .name = "snoutenstein", .binary = "snoutenstein" },
-    .{ .name = "snouty-bugs", .binary = "snouty-bugs" },
+    .{ .name = "snouty-bugs", .binary = "snouty-bugs", .title = "SNOUTY BUGHUNT" },
     // Crop: an exact 2x keeps the dither cells regular and the spheres round.
     // tufty20 = full15's scene at 20 fps, on the snouty-badge `tufty` branch (docs/CARTS.md).
     .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "tufty20" },
