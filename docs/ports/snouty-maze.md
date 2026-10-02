@@ -238,10 +238,14 @@ OVERHEAD view.
   to the fixed state 0x9e3779b9, and the first maze after every power-on or
   HOME restart or relaunch from the arcade menu is the same one, followed by the same sequence of mazes
   (the stream advances, so successive mazes within a run do differ, and the
-  actor placement follows the same stream). The Tufty matches the SYCL
-  badge exactly here; it is an upstream SYCL bug, and fixing it is a
-  cart-side or SDK change (seed from TIMER0 or the real ROSC RANDOMBIT),
-  not a port change. badge-bench fakes the register with a seeded PRNG, so
+  actor placement follows the same stream). It is an upstream SYCL bug.
+  **Fixed for the Tufty** on the snouty-badge `tufty` branch (9cbf968,
+  [../CARTS.md](../CARTS.md)): the `-Dbadge=tufty` badge build xors
+  murmur3-mixed `micros_since_boot()` into the seed in `start()`, which in
+  the arcade runs when someone picks the cart, and stirs the stream once
+  more at the first button press (for a power-on straight into the
+  single-cart build, where only the first maze is then fixed). The SYCL
+  build still shows the fixed sequence. badge-bench fakes the register with a seeded PRNG, so
   its `--seed 1..10` runs are ten different mazes, not the one hardware
   shows; the wasm preview with `--call debug_set_size:16 --call
   debug_set_seed:0` shows the hardware sequence.

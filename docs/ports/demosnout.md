@@ -64,8 +64,9 @@ Left, Right and click are never read. Nothing is held.
 * Start is never sent (A already skips), and neither are Left, Right or
   click. So the cart's Start+Select ignore-everything branch can never
   trigger.
-* The picker hint "A JUMP  B/SELECT CLOSE" is right as printed on the Tufty
-  for A and B; "SELECT" means C.
+* The picker hint reads "A JUMP  B/C CLOSE" in the Tufty build
+  (`-Dbadge=tufty`, [../CARTS.md](../CARTS.md)); the SYCL build's is
+  "A JUMP  B/SELECT CLOSE".
 * Host tests (`zig build test`): each button gives exactly its one control
   on the first press; all 32 button combinations give exactly the union of
   the direct bits and never start/left/right/click; a 3 ms tap of C still

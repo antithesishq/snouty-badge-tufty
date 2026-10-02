@@ -20,8 +20,9 @@
 //! a future XIP cart. The report, with every cart image's flash address,
 //! is installed next to the UF2 as `<name>.flash.txt`.
 //!
-//! The cart is built, unmodified, by the snouty-badge submodule's own
-//! build.zig (a path dependency), exactly as for the SYCL badge; we take its
+//! The cart is built by the snouty-badge submodule's own build.zig (a path
+//! dependency) from its `tufty` branch, as for the SYCL badge but with
+//! -Dbadge=tufty (Tufty button names on screen; docs/CARTS.md); we take its
 //! ELF, objcopy the loadable bytes and embed them.
 //!
 //! Keep this file free of file-existence or environment branching: this Zig
@@ -180,17 +181,20 @@ fn add_hello(
 }
 
 /// One cart's loadable bytes. The monorepo is configured for just this cart
-/// (RAM mode, default options); the cart ELF is objcopied from its link
+/// (RAM mode, -Dbadge=tufty, otherwise default options); the cart ELF is objcopied from its link
 /// address 0x20035100 up to the end of .data (BSS is NOLOAD and is zeroed at
 /// launch). `inspect`: also install the ELF and the image under
 /// firmware/cart/ (done once per cart, by add_arcade).
 fn cart_bin(b: *Build, cart: Cart, inspect: bool) Build.LazyPath {
+    // -Dbadge=tufty (every cart): Tufty button names in the carts' on-screen
+    // text and a clock-seeded snouty-maze (snouty-badge `tufty` branch,
+    // docs/CARTS.md). Carts without such text ignore it.
     const badge = if (cart.reflections_variant) |v|
-        b.dependency("snouty_badge", .{ .cart = cart.name, .reflections_variant = v })
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .reflections_variant = v })
     else if (cart.maze_size) |n|
-        b.dependency("snouty_badge", .{ .cart = cart.name, .maze_size = n })
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .maze_size = n })
     else
-        b.dependency("snouty_badge", .{ .cart = cart.name });
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty" });
     const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
     const bin = b.addObjCopy(elf, .{ .basename = b.fmt("{s}.bin", .{cart.binary}), .format = .binary }).getOutput();
     if (inspect) {

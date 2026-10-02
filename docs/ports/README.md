@@ -99,7 +99,9 @@ submodule tree was not touched.
 * **TIMER0 at 1 MHz.** `micros_since_boot` reads TIMER0 directly
   (`platform_cart_ram.zig`). It drives seeds, render timing and reflections'
   path-tracer deadline.
-* **ROSC on.** `cart.rand()` reads ROSC RANDOMBIT (maze).
+* **`cart.rand()` is 0.** It reads 0x4006000C, which on the RP2350 is
+  ACCESSCTRL, not the ROSC (snouty-maze.md section 8). Only snouty-maze
+  calls it, and its Tufty build seeds from TIMER0 instead.
 * **FIFO messages.** The OS must drain and ignore CART_TONE (0x27),
   CART_VOLUME (0x29) and CART_TRACE. The Tufty has no buzzer, and a full FIFO
   blocks the cart (snoutenstein, once sound is toggled on).

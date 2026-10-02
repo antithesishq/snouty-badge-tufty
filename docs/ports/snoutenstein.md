@@ -241,10 +241,12 @@ The entry `_start` is 0x20035115. `cart.bin` starts with CART_MAGIC then V1.
   UP/DOWN). Check on the badge that UP+DOWN can be pressed together by one
   thumb; if not, weapon and pause need another chord (B+C and A+C both
   collide with turn+fire).
-* **Title labels.** The cart prints SYCL names. "PRESS A" is C, "B: E1M1" is
-  A+B, "SELECT: SOUND" is an UP+DOWN tap, "START: TEST" is an UP+DOWN hold,
-  and the pause card's "HOLD B REWIND" is A+B. A long UP+DOWN on the title
-  opens the test level, which is harmless but not wanted at the show.
+* **Title labels.** Since the snouty-badge `tufty` commit 9cbf968 the cart
+  is built with `-Dbadge=tufty` and prints Tufty names: "PRESS C",
+  "UP+DN: SOUND OFF", "A+B: E1M1", "HOLD UP+DN: TEST", "HOLD A+B: REWIND"
+  on death, and a pause card with autowalk ("DOUBLE UP AUTO", see
+  [../CARTS.md](../CARTS.md)). A long UP+DOWN on the title opens the test
+  level, which is harmless but not wanted at the show.
 * **Attract demo.** It is driven by recorded input; the map does not touch
   it. A press of A, B, C, UP or DOWN takes over. Select alone would not,
   but an UP+DOWN tap usually leaks one UP or DOWN frame first, so it takes
