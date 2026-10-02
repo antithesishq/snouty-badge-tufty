@@ -372,8 +372,33 @@ pub const snouty_bugs: Map = .{
     },
 };
 
+/// snouty-flyover (docs/ports/snouty-flyover.md), a 30 fps flight read in
+/// camera.pilot(): held left/right bank, held up/down pitch, A held =
+/// boost, and the edges of B (the district verb), SELECT (skip to the next
+/// district) and START (autopilot on/off). Any direction, A or B takes
+/// manual control. Split d-pad: A/B bank, UP climbs and DOWN dives (the
+/// cart's down and up: its stick is a flight stick, the Tufty's arrows say
+/// which way the flyer goes), C = the verb at once (in no chord). A+B (a
+/// flat left thumb) = boost, held. UP+DOWN tap = skip, hold = autopilot
+/// toggle. chord_ms = 60 (two 30 fps frames): a leaked direction would take
+/// manual control, which would undo a hold that means "autopilot off" and
+/// drop the autopilot a skip keeps.
+pub const snouty_flyover: Map = .{
+    .chord_ms = 60,
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.up), .held = bit(.down) },
+        .{ .on = btn(.down), .held = bit(.up) },
+        .{ .on = btn(.c), .held = bit(.b) },
+        .{ .on = btn(.a) | btn(.b), .held = bit(.a) },
+        .{ .on = btn(.up) | btn(.down), .tap = bit(.select), .hold = bit(.start), .tap_ms = 300, .hold_ms = 500 },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
+    if (std.mem.eql(u8, name, "snouty-flyover")) return &snouty_flyover;
     if (std.mem.eql(u8, name, "snouty-bugs")) return &snouty_bugs;
     if (std.mem.eql(u8, name, "snouty-run")) return &snouty_run;
     if (std.mem.eql(u8, name, "demosnout")) return &demosnout;
@@ -1010,6 +1035,163 @@ test "snouty-bugs: never select or click, for any buttons" {
             const out = s.step(combo, 16);
             try testing.expectEqual(@as(u16, 0), out & (bit(.select) | bit(.click)));
         }
+    }
+}
+
+/// snouty-flyover behind a fast OS loop: the mapper runs every 1 ms, the
+/// cart updates every 33 ms (its 30 fps lock) and runs camera.pilot()'s
+/// input rules: input.zig edges, START (edge) toggles the autopilot, and
+/// any held direction, A or B switches to manual flight.
+const Flyover30 = struct {
+    m: Mapper = .init(&snouty_flyover),
+    t_ms: u64 = 0,
+    presents: u32 = 0,
+    out: u16 = 0,
+    prev: u16 = 0,
+    autopilot: bool = true,
+    edges: [16]u32 = @splat(0),
+    held_updates: [16]u32 = @splat(0),
+
+    const manual_bits = bit(.left) | bit(.right) | bit(.up) | bit(.down) | bit(.a) | bit(.b);
+
+    fn run(c: *Flyover30, held: u8, dur_ms: u64) !void {
+        for (0..dur_ms) |_| {
+            c.t_ms += 1;
+            c.out = c.m.update(held, c.t_ms * ms, c.presents);
+            if (c.t_ms % 33 != 0) continue;
+            // The OS owns Start+Select on the SYCL badge; never send both.
+            try testing.expect(c.out & (bit(.select) | bit(.start)) != bit(.select) | bit(.start));
+            try testing.expectEqual(@as(u16, 0), c.out & bit(.click));
+            for (0..16) |bi| {
+                const b = @as(u16, 1) << @intCast(bi);
+                if (c.out & b != 0) c.held_updates[bi] += 1;
+                if (c.out & b != 0 and c.prev & b == 0) c.edges[bi] += 1;
+            }
+            if (c.out & bit(.start) != 0 and c.prev & bit(.start) == 0) c.autopilot = !c.autopilot;
+            if (c.out & manual_bits != 0) c.autopilot = false;
+            c.prev = c.out;
+            c.presents += 1;
+        }
+    }
+
+    fn edges_of(c: *const Flyover30, ctl: Control) u32 {
+        return c.edges[@intFromEnum(ctl)];
+    }
+
+    fn held_of(c: *const Flyover30, ctl: Control) u32 {
+        return c.held_updates[@intFromEnum(ctl)];
+    }
+};
+
+test "snouty-flyover: one control per button; C at once, the rest after chord_ms" {
+    try testing.expectEqual(&snouty_flyover, for_cart("snouty-flyover"));
+    const cases = [_]struct { Button, u16 }{
+        .{ .a, bit(.left) },
+        .{ .b, bit(.right) },
+        .{ .up, bit(.down) }, // climb
+        .{ .down, bit(.up) }, // dive
+    };
+    for (cases) |c| {
+        var s: Sim = .{ .m = .init(&snouty_flyover) };
+        // 0, 16, 32 and 48 ms into the press: inside the 60 ms chord delay.
+        for (0..4) |_| try testing.expectEqual(@as(u16, 0), s.step(btn(c[0]), 16));
+        // From 64 ms: set while held.
+        for (0..30) |_| try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        _ = s.step(0, 16);
+        _ = s.step(0, 16);
+        try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+    }
+    // C is the cart's B with no delay, held as long as C.
+    var s: Sim = .{ .m = .init(&snouty_flyover) };
+    for (0..30) |_| try testing.expectEqual(bit(.b), s.step(btn(.c), 16));
+    try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+}
+
+test "snouty-flyover: quick taps still reach a 30 fps cart" {
+    // A 5 ms tap of C, and a 20 ms tap of A (inside chord_ms), between updates.
+    var c: Flyover30 = .{};
+    try c.run(0, 40);
+    try c.run(btn(.c), 5);
+    try c.run(0, 200);
+    try c.run(btn(.a), 20);
+    try c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.b));
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.left));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.a));
+}
+
+test "snouty-flyover: A+B 30 ms apart = boost while held, no bank leak" {
+    var c: Flyover30 = .{};
+    try c.run(0, 20);
+    try c.run(btn(.b), 30);
+    try c.run(btn(.a) | btn(.b), 1000);
+    // Pitch while boosting (right thumb on UP).
+    try c.run(btn(.a) | btn(.b) | btn(.up), 300);
+    // Lifted one at a time: the one still held stays masked.
+    try c.run(btn(.a), 200);
+    try c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    try testing.expect(c.held_of(.a) >= 36);
+    try testing.expect(c.held_of(.down) >= 6);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.left));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.right));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.b));
+    try testing.expect(!c.autopilot);
+}
+
+test "snouty-flyover: UP+DOWN tap skips and keeps the autopilot" {
+    var c: Flyover30 = .{};
+    try c.run(0, 100);
+    // DOWN 40 ms before UP, held 200 ms: one SELECT edge after the release.
+    try c.run(btn(.down), 40);
+    try c.run(btn(.up) | btn(.down), 200);
+    try c.run(0, 300);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.select));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.start));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.up));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.down));
+    try testing.expect(c.autopilot);
+}
+
+test "snouty-flyover: UP+DOWN hold toggles the autopilot once per hold" {
+    var c: Flyover30 = .{};
+    try c.run(0, 100);
+    // On -> off: UP first, DOWN 30 ms later, held 1 s.
+    try c.run(btn(.up), 30);
+    try c.run(btn(.up) | btn(.down), 1000);
+    try c.run(btn(.down), 100);
+    try c.run(0, 300);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.start));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.select));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.up) + c.held_of(.down));
+    try testing.expect(!c.autopilot);
+    // Off -> on.
+    try c.run(btn(.up) | btn(.down), 800);
+    try c.run(0, 300);
+    try testing.expectEqual(@as(u32, 2), c.edges_of(.start));
+    try testing.expect(c.autopilot);
+}
+
+test "snouty-flyover: bank, pitch and the verb together" {
+    var c: Flyover30 = .{};
+    try c.run(btn(.a) | btn(.down), 300);
+    try c.run(btn(.a) | btn(.down) | btn(.c), 100);
+    try c.run(btn(.b) | btn(.up), 300);
+    try c.run(0, 100);
+    try testing.expect(c.held_of(.left) >= 10);
+    try testing.expect(c.held_of(.up) >= 10); // DOWN dives
+    try testing.expect(c.held_of(.right) >= 7);
+    try testing.expect(c.held_of(.down) >= 7); // UP climbs
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.b));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.a) + c.edges_of(.select) + c.edges_of(.start));
+}
+
+test "snouty-flyover: never click, never select with start, for any buttons" {
+    // Flyover30.run checks both on every update.
+    for (0..32) |combo_usize| {
+        var c: Flyover30 = .{};
+        try c.run(@intCast(combo_usize), 1200);
+        try c.run(0, 300);
     }
 }
 
