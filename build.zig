@@ -15,8 +15,11 @@
 //!   snouty-tufty-hello       M0 bring-up test screen, clk_sys 250 MHz
 //!   snouty-tufty-hello-150   the same at 150 MHz (fallback for the clock path)
 //!   snouty-tufty-<cart>      M1 Tufty OS running one SYCL RAM cart, 250 MHz
-//!   snouty-tufty-arcade      M2 every RAM cart in `carts` behind a boot menu
-//!                            (docs/ARCADE.md)
+//!   snouty-tufty-arcade      M2 every arcade cart in `carts` behind a boot
+//!                            menu: the RAM carts embedded, and the one XIP
+//!                            cart (snouty-zero) at 0x101C0000 (docs/ARCADE.md)
+//!   snouty-tufty-snouty-zero the Tufty OS + the snouty-zero XIP cart at
+//!                            0x101C0000 (-Dcart=snouty-zero)
 //!   snouty-tufty-genesis     the Tufty OS + the genesis XIP cart at
 //!                            0x101C0000 + a FAT12 drive holding the ROM at
 //!                            0x10080000, in one UF2 (`xip` carts, below)
@@ -29,9 +32,10 @@
 //!   zig build menu-png            render the arcade menu to docs/arcade-menu.png
 //!
 //! Each cart-host UF2 is checked after the build (tools/flash_check.zig):
-//! nothing may reach 0x101C0000, since 0x101C0000..0x10200000 is kept for
-//! a future XIP cart. The report, with every cart image's flash address,
-//! is installed next to the UF2 as `<name>.flash.txt`.
+//! nothing but the XIP cart may reach 0x101C0000, since
+//! 0x101C0000..0x10200000 is the XIP cart window, and nothing may reach
+//! 0x10200000. The report, with every cart image's flash address, is
+//! installed next to the UF2 as `<name>.flash.txt`.
 //!
 //! The cart is built by the snouty-badge submodule's own build.zig (a path
 //! dependency) from its `tufty` branch, as for the SYCL badge but with
@@ -95,6 +99,11 @@ const carts = [_]Cart{
     // Fit: the verb caption is at y 119..127, which crop would cut. The
     // cart's own 30 fps lock and options (docs/ports/snouty-flyover.md).
     .{ .name = "snouty-flyover", .binary = "snouty-flyover" },
+    // The arcade's one XIP cart (the monorepo builds it XIP-only since its
+    // M5): its image is packed at 0x101C0000, not embedded. Fit: the HUD's
+    // lap/clock/rank at y 1..8 and the snapshot bar and minimap down to
+    // y 126, which crop would cut (docs/ports/snouty-zero.md).
+    .{ .name = "snouty-zero", .binary = "snouty-zero", .xip = true },
     // XIP with its ROM on a FAT12 drive: its own UF2 only,
     // snouty-tufty-genesis.uf2 (docs/ports/snouty-genesis.md). Fit keeps all
     // 128 rows: the cart's menu footer, scrub bar and hint strip sit on its
@@ -114,10 +123,11 @@ const blurbs = [_][2][]const u8{
     .{ "snouty-reflections", "A/B ORBIT  UP/DN HIGH  C FREEZE" },
     .{ "snouty-maze", "A/B TURN  UP/DN STEP  C SKIP" },
     .{ "snouty-flyover", "C VERB  A+B BOOST  UP+DN SKIP" },
+    .{ "snouty-zero", "C GO  UP BOOST  A+B REWIND" },
 };
 
 /// Arcade flash budget: every firmware image must end below this address.
-/// 0x101C0000..0x10200000 (256 KB) is reserved for a future XIP cart. The
+/// 0x101C0000..0x10200000 (256 KB) is the XIP cart window. The
 /// linker's 2 MB flash region still stops anything at 0x10200000 or above.
 const flash_limit: u32 = 0x101C0000;
 

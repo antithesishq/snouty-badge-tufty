@@ -9,6 +9,7 @@ changes. `snouty-badge` main is never modified from here.
 | cfe3046 | snouty-reflections: `tufty20` variant (full15's scene at 20 fps; docs/ports/snouty-reflections.md) |
 | 9cbf968 | `-Dbadge=tufty`: Tufty button names on screen (demosnout, snoutenstein, snouty-bugs) and a clock-seeded snouty-maze (below) |
 | c77fd61 | `-Dbadge=tufty` for snouty-flyover and snouty-genesis: Tufty button names on screen, genesis debug overlay off at boot (below) |
+| ddd04fc | snouty-zero: with `-Dbadge=tufty` the title also takes A (the Tufty's C), and the PRESS cards say `PRESS C` (docs/ports/snouty-zero.md) |
 
 ## `-Dbadge=tufty`
 
@@ -62,6 +63,12 @@ On-screen strings, SYCL -> Tufty (they follow the maps in `ports/*.md`):
 | | ROM picker keys | `A: play`, `B: test ROM` | `C: play`, `A+B: test` |
 | | no-ROM help | `A: run test ROM`; `Copy a .gen, .md or .bin file to the SYCLBADGE drive, eject, restart.` | `C: run test ROM`; `Build with -Dgenesis_rom=FILE (.gen, .md or .bin), flash the UF2.` (4 lines either way) |
 | | debug overlay | on at boot | off at boot (the menu's `Debug overlay` row still turns it on) |
+| snouty-zero | title, results, Grand Prix standings | `PRESS START` | `PRESS C`; the title also takes A (it took only Start; the results and standings already took A) |
+
+snouty-zero (ddd04fc against 9cbf968, `-Dcart=snouty-zero -Dcart-mode=xip`):
+the SYCL XIP ELF's loadable bytes, every non-debug section and its UF2 are
+byte-identical, and so are the .wasm code and data sections. The Tufty
+build's `.text` is 4 bytes shorter.
 
 Before and after, as badge-bench frames (SYCL left, Tufty right):
 [snoutenstein title + pause](ports/tufty-labels-snoutenstein.png),

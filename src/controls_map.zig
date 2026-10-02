@@ -9,10 +9,10 @@
 ///   direct   `held` bits are set while the trigger is held.
 ///   chord    a trigger of 2+ buttons. While it is held its bits are set and
 ///            the members' own bindings are masked until each member is
-///            released. `chord_ms` (per map) delays the `held` bits of
-///            chord members so a chord can form without leaking; a member
-///            tapped and released inside that delay still sends its bits as
-///            a pulse.
+///            released. `chord_ms` (per map, or per binding to override it)
+///            delays the `held` bits of chord members so a chord can form
+///            without leaking; a member tapped and released inside that
+///            delay still sends its bits as a pulse.
 ///   tap      `tap` bits pulse when the trigger is released within `tap_ms`.
 ///   hold     `hold` bits are set once the trigger has been held `hold_ms`,
 ///            until release.
@@ -74,6 +74,10 @@ pub const Binding = struct {
     /// A tap, then a press within this (release to press), latches `latch`
     /// (latch_by = .double_tap).
     double_ms: u16 = 250,
+    /// This direct binding's chord delay, overriding the map's `chord_ms`
+    /// (null: the map's). Lets a map delay only the members whose leak would
+    /// matter (snouty-zero: UP is Overclock) and keep the others instant.
+    chord_ms: ?u16 = null,
 
     fn is_chord(b: Binding) bool {
         return @popCount(b.on) > 1;
@@ -91,6 +95,7 @@ pub const LatchBy = enum {
 pub const Map = struct {
     bindings: []const Binding,
     /// Delay before a chord member's direct `held` bits start (0 = at once).
+    /// A binding's own `chord_ms` overrides it for that binding.
     chord_ms: u16 = 0,
     /// Minimum length of any rising output bit, in cart presents.
     min_presents: u8 = 2,
@@ -138,7 +143,6 @@ pub const Mapper = struct {
     pub fn update(m: *Mapper, held: u8, now_us: u64, presents: u32) u16 {
         const map = m.map;
         const members = map.chord_members();
-        const chord_us: u64 = @as(u64, map.chord_ms) * 1000;
 
         const pressed = held & ~m.prev_held;
         const released = m.prev_held & ~held;
@@ -156,6 +160,7 @@ pub const Mapper = struct {
         var level: u16 = 0;
         var pulse: u16 = 0;
         for (map.bindings, 0..) |bd, i| {
+            const chord_us: u64 = @as(u64, bd.chord_ms orelse map.chord_ms) * 1000;
             const satisfied = if (bd.is_chord())
                 held & bd.on == bd.on
             else
@@ -421,6 +426,31 @@ pub const snouty_genesis: Map = .{
     },
 };
 
+/// snouty-zero (docs/ports/snouty-zero.md), a 60 fps Mode 7 racer: held
+/// left/right steer, A held = accelerate, Down = brake (tight turn with a
+/// steer), the Up edge = Overclock, B held = rewind, Start = pause (title,
+/// results and menus confirm with A or Start). A racer accelerates nearly
+/// all the time, so C latches the throttle on (snouty-bugs' autofire latch):
+/// the first C starts it, and every later C re-presses A, which the menus
+/// read as confirm. That frees the right thumb for UP (Overclock) and DOWN
+/// (brake) while the left thumb steers on A/B. A+B (a flat left thumb) =
+/// rewind, held. UP+DOWN = Start (pause / resume). A/B keep no chord delay
+/// (a 2-present steer leak before a rewind is harmless), but UP and DOWN
+/// wait 60 ms: an UP leak before the pause chord would fire an Overclock
+/// (a quarter of the thermal bar), and in a menu a leaked UP or DOWN would
+/// move the cursor before Start confirms (unpausing onto RESTART).
+pub const snouty_zero: Map = .{
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.c), .latch = bit(.a), .latch_by = .press, .retrigger = true },
+        .{ .on = btn(.up), .held = bit(.up), .chord_ms = 60 },
+        .{ .on = btn(.down), .held = bit(.down), .chord_ms = 60 },
+        .{ .on = btn(.a) | btn(.b), .held = bit(.b) },
+        .{ .on = btn(.up) | btn(.down), .held = bit(.start) },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-flyover")) return &snouty_flyover;
@@ -431,6 +461,7 @@ pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-reflections")) return &snouty_reflections;
     if (std.mem.eql(u8, name, "snouty-maze")) return &snouty_maze;
     if (std.mem.eql(u8, name, "snouty-genesis")) return &snouty_genesis;
+    if (std.mem.eql(u8, name, "snouty-zero")) return &snouty_zero;
     return &default;
 }
 
@@ -1340,6 +1371,193 @@ test "snouty-flyover: never click, never select with start, for any buttons" {
         var c: Flyover30 = .{};
         try c.run(@intCast(combo_usize), 1200);
         try c.run(0, 300);
+    }
+}
+
+/// snouty-zero behind a fast OS loop: the mapper runs every 1 ms and the cart
+/// updates at 60 Hz (every 16,667 us), detecting edges the way its input.zig
+/// does. Counts what the cart saw.
+const Zero60 = struct {
+    m: Mapper = .init(&snouty_zero),
+    t_us: u64 = 0,
+    next_us: u64 = 16_667,
+    presents: u32 = 0,
+    out: u16 = 0,
+    prev: u16 = 0,
+    edges: [16]u32 = @splat(0),
+    held_updates: [16]u32 = @splat(0),
+
+    fn run(c: *Zero60, held: u8, dur_ms: u64) !void {
+        for (0..dur_ms) |_| {
+            c.t_us += 1000;
+            c.out = c.m.update(held, c.t_us, c.presents);
+            if (c.t_us < c.next_us) continue;
+            c.next_us += 16_667;
+            // The OS owns Start+Select and click on the SYCL badge; the cart
+            // never reads Select. None of them is ever sent.
+            try testing.expectEqual(@as(u16, 0), c.out & (bit(.select) | bit(.click)));
+            for (0..16) |bi| {
+                const b = @as(u16, 1) << @intCast(bi);
+                if (c.out & b != 0) c.held_updates[bi] += 1;
+                if (c.out & b != 0 and c.prev & b == 0) c.edges[bi] += 1;
+            }
+            c.prev = c.out;
+            c.presents += 1;
+        }
+    }
+
+    fn edges_of(c: *const Zero60, ctl: Control) u32 {
+        return c.edges[@intFromEnum(ctl)];
+    }
+
+    fn held_of(c: *const Zero60, ctl: Control) u32 {
+        return c.held_updates[@intFromEnum(ctl)];
+    }
+};
+
+test "zero: for_cart; A/B steer at once, UP/DOWN from 60 ms, C latches the throttle" {
+    try testing.expectEqual(&snouty_zero, for_cart("snouty-zero"));
+    const instant = [_]struct { Button, u16 }{ .{ .a, bit(.left) }, .{ .b, bit(.right) } };
+    for (instant) |c| {
+        var s: Sim = .{ .m = .init(&snouty_zero) };
+        for (0..30) |_| try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+    }
+    const delayed = [_]struct { Button, u16 }{ .{ .up, bit(.up) }, .{ .down, bit(.down) } };
+    for (delayed) |c| {
+        var s: Sim = .{ .m = .init(&snouty_zero) };
+        // 0, 16, 32 and 48 ms into the press: inside its 60 ms chord delay.
+        for (0..4) |_| try testing.expectEqual(@as(u16, 0), s.step(btn(c[0]), 16));
+        for (0..30) |_| try testing.expectEqual(c[1], s.step(btn(c[0]), 16));
+        _ = s.step(0, 16);
+        _ = s.step(0, 16);
+        try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+    }
+    // C: the throttle (the cart's A) from the press on, and it stays on.
+    var s: Sim = .{ .m = .init(&snouty_zero) };
+    try testing.expectEqual(bit(.a), s.step(btn(.c), 16));
+    for (0..600) |_| try testing.expectEqual(bit(.a), s.step(0, 16));
+}
+
+test "zero: nothing latched at boot; steer, Overclock and brake under the latched throttle" {
+    var c: Zero60 = .{};
+    try c.run(0, 2000);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.a));
+    // Steering alone never accelerates.
+    try c.run(btn(.a), 300);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.a));
+    try c.run(0, 100);
+    // One quick C tap (5 ms): the throttle is on for good.
+    try c.run(btn(.c), 5);
+    try c.run(0, 1000);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    // Both thumbs busy, no hand on C: steer left + brake (the tight turn),
+    // then steer right + Overclock, the throttle on throughout.
+    try c.run(btn(.a) | btn(.down), 500);
+    try testing.expect(c.out == bit(.a) | bit(.left) | bit(.down));
+    try c.run(0, 50);
+    try c.run(btn(.b) | btn(.up), 500);
+    try testing.expect(c.out == bit(.a) | bit(.right) | bit(.up));
+    try c.run(0, 100);
+    try testing.expectEqual(bit(.a), c.out);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.up));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.b) + c.held_of(.start));
+}
+
+test "zero: every later C is a fresh A press (menus confirm), then the throttle again" {
+    var s: Sim = .{ .m = .init(&snouty_zero) };
+    var e: Edges = .{};
+    for (0..5) |_| e.feed(s.step(0, 16), .a);
+    // The first C: the title (Tufty build: A or Start) and the throttle.
+    e.feed(s.step(btn(.c), 16), .a);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 1), e.count);
+    // Menu confirms: a held C, a sub-present tap, taps on consecutive
+    // presents. Each one is an A edge; A is back on after each.
+    for (0..5) |_| e.feed(s.step(btn(.c), 16), .a);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 2), e.count);
+    s.t += 2 * ms;
+    e.feed(s.m.update(btn(.c), s.t, s.presents), .a);
+    s.t += 2 * ms;
+    _ = s.m.update(0, s.t, s.presents);
+    for (0..10) |_| e.feed(s.step(0, 16), .a);
+    try testing.expectEqual(@as(u32, 3), e.count);
+    try testing.expect(e.prev & bit(.a) != 0);
+    // A HOME restart (a fresh mapper) clears the throttle.
+    s.m = .init(&snouty_zero);
+    s.presents = 0;
+    for (0..5) |_| try testing.expectEqual(@as(u16, 0), s.step(0, 16));
+}
+
+test "zero: UP+DOWN inside 60 ms = one Start, no Overclock, no cursor move" {
+    // UP first by 40 ms, then DOWN first by 50 ms, then held 1 s: one Start
+    // edge each (pause, then resume), never up or down.
+    var c: Zero60 = .{};
+    try c.run(btn(.c), 20);
+    try c.run(0, 100);
+    try c.run(btn(.up), 40);
+    try c.run(btn(.up) | btn(.down), 200);
+    try c.run(0, 300);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.start));
+    try c.run(btn(.down), 50);
+    try c.run(btn(.up) | btn(.down), 1000);
+    // Released one at a time: the one still held stays masked.
+    try c.run(btn(.up), 200);
+    try c.run(0, 300);
+    try testing.expectEqual(@as(u32, 2), c.edges_of(.start));
+    try testing.expectEqual(@as(u32, 0), c.held_of(.up) + c.held_of(.down));
+    // The throttle never dropped: one A edge, from the C press.
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.a));
+}
+
+test "zero: a quick UP tap still fires one Overclock" {
+    // 20 ms (inside the chord delay): sent as a pulse on the release.
+    var c: Zero60 = .{};
+    try c.run(0, 30);
+    try c.run(btn(.up), 20);
+    try c.run(0, 200);
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.up));
+    // A long hold: one edge (the cart fires on the edge).
+    try c.run(btn(.up), 800);
+    try c.run(0, 200);
+    try testing.expectEqual(@as(u32, 2), c.edges_of(.up));
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.start));
+}
+
+test "zero: A+B rewinds on every update of the hold, steering masked" {
+    var c: Zero60 = .{};
+    try c.run(btn(.c), 20);
+    try c.run(0, 100);
+    // A 10 ms before B: A's steer may leak for its 2-present stretch, no more.
+    try c.run(btn(.a), 10);
+    try c.run(btn(.a) | btn(.b), 1000);
+    const b_updates = c.held_of(.b);
+    try testing.expect(b_updates >= 58);
+    try testing.expect(c.held_of(.left) <= 2);
+    // Release B first: A stays masked until it too is released.
+    try c.run(btn(.a), 200);
+    try c.run(0, 100);
+    try testing.expect(c.held_of(.left) <= 2);
+    try testing.expectEqual(@as(u32, 0), c.held_of(.right));
+    try testing.expectEqual(@as(u32, 1), c.edges_of(.b));
+    // DOWN held through the rewind still reaches the cart (it ignores it).
+    try c.run(btn(.a) | btn(.b) | btn(.down), 300);
+    try testing.expect(c.out & bit(.b) != 0);
+    try testing.expectEqual(@as(u32, 0), c.edges_of(.start));
+}
+
+test "zero: never select or click; Start only from UP+DOWN" {
+    // Zero60.run checks select and click on every update.
+    var held: u8 = 0;
+    while (held < 32) : (held += 1) {
+        var c: Zero60 = .{};
+        try c.run(held, 1200);
+        try c.run(0, 300);
+        const ud = btn(.up) | btn(.down);
+        if (held & ud != ud) try testing.expectEqual(@as(u32, 0), c.held_of(.start));
+        if (held & ud == ud) try testing.expectEqual(@as(u32, 0), c.held_of(.up) + c.held_of(.down));
     }
 }
 
