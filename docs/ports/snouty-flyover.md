@@ -5,7 +5,8 @@ over a strip of data structures generated on the badge, with a low-poly 3D
 anteater as the flyer, locked to 30 fps. An autopilot flies at boot and
 presses each district's verb by itself, and any input takes over. The
 sources are in `snouty-badge/carts/snouty-flyover` (M4.1). The cart is the
-unmodified RAM-mode build with its default options, embedded in the Tufty OS
+RAM-mode build with its default options plus `-Dbadge=tufty` (the captions
+name C, section 2), embedded in the Tufty OS
 exactly as snouty-run is (see [snouty-run.md](snouty-run.md) section 5 for
 how the OS runs a cart). The map primitives are defined in
 [README.md](README.md) and `src/controls_map.zig`.
@@ -67,7 +68,10 @@ sent here. The cart has no sound and never writes the neopixels.
 The on-screen text: the boot card ("MEMORY LANE / generated on badge /
 30 fps"), a title card per segment at y 4..33, and the caption at the
 bottom-left, which names the verb as "B: collect garbage", "B: send a
-packet" and so on (section 7, labels).
+packet" and so on. The Tufty build (`-Dbadge=tufty`, snouty-badge `tufty`
+c77fd61) reads "C: collect garbage", "C: send a packet" and so on, since
+C is the verb there (section 3; docs/CARTS.md has the string table and
+[tufty-labels-flyover.png](tufty-labels-flyover.png) the before/after).
 
 ## 3. Tufty map (`controls_map.snouty_flyover`)
 
@@ -228,12 +232,11 @@ same 30 fps cart as SYCL. A 60 fps Tufty build would need a cart change
 
 ## 7. Risks and unknowns
 
-* **The caption says "B: ...".** On the Tufty the verb is C, and B banks
-  right. A visitor who reads "B: collect garbage" and presses B banks
-  instead. Upstream's `-Dbadge=tufty` label option (snouty-tufty main,
-  submodule `tufty` 9cbf968, docs/CARTS.md) does not cover this cart. The
-  fix is a cart-side string change on the `tufty` branch ("C: ...") behind
-  that option, or the arcade's controls line, which says `C VERB`.
+* **The caption said "B: ...".** Fixed: on the `tufty` branch at
+  c77fd61 the `-Dbadge=tufty` option (docs/CARTS.md) makes every caption
+  "C: ...", matching the arcade's controls line (`C VERB`). The boot card
+  and the district cards name no buttons. The SYCL build is byte-identical
+  in code and data.
 * **UP climbs, unlike the SYCL stick** (section 3). Check that it feels
   right on the badge; the swap is one map edit.
 * **The skip frame** (~17 ms at 250 MHz, section 6) is black, so a late

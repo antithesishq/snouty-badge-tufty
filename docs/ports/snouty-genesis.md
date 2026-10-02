@@ -4,9 +4,10 @@ Snouty Genesis is the monorepo's Sega Genesis / Mega Drive emulator: a
 68000 + Z80 + VDP core, 30 presents a second with two Genesis frames per
 update, a 500 ms Select hold for the emulator menu (scrub / rewind, button
 layout, scale, Smooth H40, sound, reset, ROM picker, About). The sources
-are in `snouty-badge/carts/snouty-genesis` (`tufty` branch, 9cbf968). It is
+are in `snouty-badge/carts/snouty-genesis` (`tufty` branch, c77fd61). It is
 the first **XIP cart** on the Tufty: its code runs from flash, so it cannot
-be a RAM image like the other ports. The cart is **unmodified**; the Tufty
+be a RAM image like the other ports. The cart is **unmodified** apart from
+its `-Dbadge=tufty` strings and debug-overlay default (section 4); the Tufty
 OS learned to run XIP carts, and the UF2 carries the ROM on a FAT12 drive
 image, the same way the SYCL badge's USB drive holds it.
 
@@ -174,22 +175,34 @@ bottom. What it would take:
 1. Power-on: ~0.3 s panel bring-up, the boot CRC check (~50 ms, black).
    A **cyan** screen means the cart window is empty or not this build's (the
    UF2 did not fully land); **orange**, the drive is not this build's.
-2. The cart's 1.2 s splash (Iris mark, "SNOUTY GENESIS", "Hold Select:
-   menu": on the Tufty that is UP+DOWN held), any button skips it.
+2. The cart's 1.2 s splash (Iris mark, "SNOUTY GENESIS", "Hold UP+DOWN:
+   menu" in the Tufty build), any button skips it.
 3. Sonic: the SEGA screen, then the title (about 13 s after power-on in the
    bench). **UP+DOWN tap = Start.** Green Hill Zone act 1 follows.
-4. The debug overlay is on by default (the cart's choice until hardware
-   numbers exist): top left `avg`/`max` update microseconds, then presents
-   and emulated frames per second. **These are the real 250 MHz numbers:
-   write them down.** The bottom lines read
+4. The debug overlay is **off** at boot in the Tufty build (on the SYCL
+   badge it is on; `-Dbadge=tufty` flips the default, c77fd61). Turn it
+   on with the menu's `Debug overlay` row: top left `avg`/`max` update
+   microseconds, then presents and emulated frames per second. **These are
+   the real 250 MHz numbers: write them down.** The bottom lines read
    `ROM: drive contiguous SONIC1.BIN 512 KB crc ...` (the CRC fills in
-   over the first seconds). The menu's `Debug overlay` row hides it.
+   over the first seconds). The same row hides it again.
 5. Sound is off (no audio on the Tufty); tones are accepted and dropped.
 
-The on-screen names are the SYCL ones ("Hold Select: menu", "B: back to
-game", "Left/Right: rewind", the picker's "A plays"). Mapping them to the
-Tufty map above (UP+DOWN, A+B, A/B, C) is a follow-up on the `tufty`
-branch's `-Dbadge=tufty` option: the hints live in the shared lib/hint.zig.
+The on-screen names follow the Tufty map above (snouty-badge `tufty`
+c77fd61, `-Dbadge=tufty`; docs/CARTS.md has the full table and
+[tufty-labels-genesis.png](tufty-labels-genesis.png) the before/after):
+
+| Screen | SYCL | Tufty |
+|---|---|---|
+| splash, first 3 s of play | `Hold Select: menu` | `Hold UP+DOWN: menu` |
+| menu, Resume row | `Left/Right: rewind` | `A/B: rewind` |
+| menu footer / About | `B: back to game` / `B: back` | `A+B: back to game` / `A+B: back` |
+| menu, Buttons row | `Btns B=B A=C S=A` | `Btns AB=B C=C UD=A` (UD = the short UP+DOWN hold, the Select tap) |
+| ROM picker | `A: play`, `B: test ROM` | `C: play`, `A+B: test` |
+| no-ROM help | `A: run test ROM`, "Copy ... to the SYCLBADGE drive, eject, restart." | `C: run test ROM`, "Build with -Dgenesis_rom=FILE (.gen, .md or .bin), flash the UF2." |
+
+The shared lib/hint.zig keeps the SYCL strings for Boy, Gear and Lynx; the
+Tufty set is `hint.tufty_genesis`, picked in frontend/input.zig (`hints`).
 
 ## 5. Bench
 
@@ -275,5 +288,7 @@ The OS keeps to 0x20000000..0x20020000, as for every cart.
   crash looks like a hang (HOME still works; it runs on core 0).
 * **HOME short press restarts the emulator** and loses the game (there is
   no save). Hold HOME only for BOOTSEL.
-* **The emulator's on-screen button names are the SYCL ones** (section 4).
+* **The menu takes ~0.8 s of UP+DOWN** (300 ms to Select, then the cart's
+  500 ms hold). The hint says "Hold UP+DOWN: menu"; letting go between
+  0.3 and 0.8 s sends Genesis A instead (the `UD` of the Buttons row).
 * Untested on hardware, like the other ports before their gate.
