@@ -51,6 +51,7 @@ const clocks = @import("clocks.zig");
 const st7789 = @import("drivers/st7789.zig");
 const buttons = @import("drivers/buttons.zig");
 const system = @import("system.zig");
+const power = @import("power.zig");
 const scaler = @import("scaler.zig");
 const controls_map = @import("controls_map.zig");
 const abi = @import("os/abi.zig");
@@ -483,6 +484,7 @@ fn exec(cmd: arcade.Command) void {
 }
 
 pub noinline fn main() void {
+    power.boot_check();
     system.power_on_peripherals();
     buttons.init();
     st7789.init(clocks.sys_freq);

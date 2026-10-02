@@ -2,6 +2,7 @@
 test {
     _ = @import("pattern.zig");
     _ = @import("home.zig");
+    _ = @import("power_sweep.zig");
     _ = @import("scaler.zig");
     _ = @import("controls_map.zig");
     _ = @import("os/abi.zig");

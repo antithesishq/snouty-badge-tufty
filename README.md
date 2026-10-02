@@ -20,6 +20,7 @@ therefore run on core 1 with the Tufty's screen and buttons.
 * [docs/DUALBOOT.md](docs/DUALBOOT.md): the arcade as a dual boot beside the
   badge's own Supabase MicroPython firmware, with its launcher app
   (`supabase-app/`)
+* [docs/POWER.md](docs/POWER.md): hold RESET to power off, any button to wake
 * [docs/ports/](docs/ports/README.md): per-cart port notes and button maps
 * [docs/CARTS.md](docs/CARTS.md): Tufty-only cart changes (the submodule's `tufty` branch)
 

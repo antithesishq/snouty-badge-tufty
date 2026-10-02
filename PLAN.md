@@ -108,6 +108,9 @@ needed for the first ports.
   beside MicroPython, a Badgeware app reboots into it through the bootrom's
   RAM_IMAGE boot and `chain_image()`, and a menu row reboots back. See
   [docs/DUALBOOT.md](docs/DUALBOOT.md).
+  Power off (2026-10-02, host-tested, not yet on hardware): hold RESET
+  for the rear-LED sweep and the badge goes to POWMAN P1.7; a button
+  press wakes it, as the stock firmware. See [docs/POWER.md](docs/POWER.md).
 
 ## Open questions (defaulted)
 

@@ -147,6 +147,10 @@ The arcade menu works like this:
 * In a cart, a short HOME press goes back to the menu, and holding HOME
   for 1 s reboots into BOOTSEL. That is handy for the next flash.
 * The single-cart UF2s restart the cart on a short HOME press instead.
+* **Power off:** hold RESET until the rear LEDs have swept on and faded
+  out (about 2 s). Any of A, B, C, UP, DOWN or RESET turns it back on.
+  Hold UP + DOWN as well for the deepest off, which only RESET wakes. See
+  [POWER.md](POWER.md).
 
 Each cart's on-screen hints use the Tufty's button names. The main
 controls:

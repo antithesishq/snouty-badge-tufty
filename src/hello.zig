@@ -14,6 +14,7 @@ const st7789 = @import("drivers/st7789.zig");
 const buttons = @import("drivers/buttons.zig");
 const pattern = @import("pattern.zig");
 const system = @import("system.zig");
+const power = @import("power.zig");
 
 comptime {
     _ = microzig.export_startup();
@@ -29,6 +30,7 @@ const backlight_level: u8 = 230;
 var column_bufs: [2][st7789.column_pixels]u16 = undefined;
 
 pub noinline fn main() void {
+    power.boot_check();
     system.power_on_peripherals();
     buttons.init();
     st7789.init(clocks.sys_freq);
