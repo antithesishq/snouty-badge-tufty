@@ -22,6 +22,16 @@
 /// RAM: the OS lives in 0x20000000..0x20020000 (the linker region is cut to
 /// 128 KB in build.zig). 0x20020000..0x20080000 is the cart's: IPC block,
 /// then the cart image at 0x20035100, its BSS/heap, its stack at the top.
+///
+/// XIP carts (snouty-genesis; `cart_meta.xips`): the image is not embedded
+/// here. The UF2 writes it to the SYCL cart window at 0x101C0000 (and the
+/// FAT12 drive the cart reads its ROM from at 0x10080000). At boot the OS
+/// checks both against the CRC32s the build recorded (`xip_meta`) and the
+/// window's vector table as the SYCL OS does; a launch zeroes cart RAM and
+/// starts core 1 at the vector table's reset handler with its SP and VTOR
+/// (sycl-badge src/os/cart.zig executeCart, XIP branch). The cart's own
+/// reset handler (snouty-badge build/xip/entry.zig) copies .data, zeroes
+/// .bss and turns on the FPU and the cycle counter.
 const std = @import("std");
 const microzig = @import("microzig");
 const hal = microzig.hal;
@@ -30,6 +40,7 @@ const fifo = hal.multicore.fifo;
 const build_options = @import("build_options");
 const cart_meta = @import("cart_meta");
 const cart_images = @import("cart_images").images;
+const xip_meta = @import("xip_meta");
 
 const clocks = @import("clocks.zig");
 const st7789 = @import("drivers/st7789.zig");
@@ -49,11 +60,13 @@ comptime {
 pub const init = clocks.init;
 
 /// One embedded cart: its image, scale mode and button map (by name, from
-/// controls_map.for_cart), as the generated table lists them.
+/// controls_map.for_cart), as the generated table lists them. `xip`: the
+/// image is the flash window's, `bytes` is empty.
 const Slot = struct {
     bytes: []const u8,
     scale: scaler.Mode,
     map: *const controls_map.Map,
+    xip: bool,
 };
 
 const cart_count = cart_images.len;
@@ -62,15 +75,56 @@ const slots: [cart_count]Slot = blk: {
     if (cart_count == 0 or cart_count > arcade.max_carts) @compileError("1..32 carts");
     if (cart_meta.names.len != cart_count) @compileError("cart_meta and cart_images disagree");
     var s: [cart_count]Slot = undefined;
-    for (&s, cart_images, cart_meta.names, cart_meta.scales) |*slot, bytes, name, scale| {
+    var xip_slots = 0;
+    for (&s, cart_images, cart_meta.names, cart_meta.scales, cart_meta.xips) |*slot, bytes, name, scale, xip| {
         slot.* = .{
             .bytes = bytes,
             .scale = std.meta.stringToEnum(scaler.Mode, scale) orelse @compileError("scale must be fit, crop or native"),
             .map = controls_map.for_cart(name),
+            .xip = xip,
         };
+        if (xip) xip_slots += 1;
     }
+    // One cart window, so one XIP cart; and its UF2 must have packed it.
+    if (xip_slots > 1) @compileError("at most one XIP cart per firmware");
+    if (xip_slots == 1 and !xip_meta.present) @compileError("an XIP cart needs the xip_meta of its packed UF2");
     break :blk s;
 };
+
+/// How to start a validated cart.
+const Launch = struct {
+    /// RAM cart: copy `bytes` to 0x20035100 and zero its BSS. XIP cart:
+    /// nothing to copy (its reset handler sets up .data/.bss).
+    xip: bool,
+    bss_start: u32 = 0,
+    bss_end: u32 = 0,
+    entry_point: u32,
+    initial_sp: u32,
+    /// Core 1's VTOR for the cart (0: leave it, as for RAM carts).
+    vector_table: u32 = 0,
+};
+
+/// CRC32 of `len` bytes of flash at `addr` (read through XIP).
+fn flash_crc(addr: u32, len: u32) u32 {
+    const p: [*]const u8 = @ptrFromInt(addr);
+    return std.hash.Crc32.hash(p[0..len]);
+}
+
+/// Checks one slot's image: a RAM image as the SYCL loader does, an XIP
+/// cart by its vector table and the CRC32s of the cart window and the drive.
+fn validate_slot(slot: *const Slot) cart_image.Error!Launch {
+    // `xip_meta.present` is comptime: RAM-only firmwares carry no XIP code.
+    if (!xip_meta.present or !slot.xip) {
+        const info = try cart_image.validate(slot.bytes, abi.cart_ram_origin);
+        return .{ .xip = false, .bss_start = info.bss_start, .bss_end = info.bss_end, .entry_point = info.entry_point, .initial_sp = abi.cart_initial_sp };
+    }
+    const vt: *const volatile [2]u32 = @ptrFromInt(cart_image.xip_window_start);
+    const info = try cart_image.validate_xip(.{ vt[0], vt[1] });
+    if (flash_crc(xip_meta.image_addr, xip_meta.image_len) != xip_meta.image_crc) return error.XipMismatch;
+    // A cart with a ROM drive (snouty-genesis); 0 for one without.
+    if (xip_meta.drive_len != 0 and flash_crc(xip_meta.drive_addr, xip_meta.drive_len) != xip_meta.drive_crc) return error.DriveMismatch;
+    return .{ .xip = true, .entry_point = info.entry_point, .initial_sp = info.initial_sp, .vector_table = info.vector_table };
+}
 
 /// Button mapper state and the number of cart presents (pulse stretching
 /// counts presents, not OS loops).
@@ -90,8 +144,11 @@ var column_bufs: [2][st7789.column_pixels]u16 = undefined;
 // Cart launch
 // ========================================
 
-/// Entry point for core 1, read by core1_main after launch.
+/// Entry point, initial MSP and VTOR (0: unchanged) for core 1, read by
+/// core1_main after launch.
 var cart_entry: u32 = 0;
+var cart_sp: u32 = 0;
+var cart_vtor: u32 = 0;
 
 fn ram(start: u32, end: u32) []u8 {
     const p: [*]u8 = @ptrFromInt(start);
@@ -142,10 +199,13 @@ fn start_cart(index: u8) void {
 
     // Fresh cart RAM: zero everything (IPC block, BSS, heap, stack), then
     // copy the image to its link address. BSS is zeroed again per the
-    // descriptor, as the SYCL loader does.
+    // descriptor, as the SYCL loader does. An XIP cart has nothing to copy:
+    // its reset handler copies .data from flash and zeroes .bss itself.
     @memset(ram(abi.process_ram_start, abi.process_ram_end), 0);
-    @memcpy(ram(abi.cart_ram_origin, abi.cart_ram_origin + @as(u32, @intCast(slot.bytes.len))), slot.bytes);
-    @memset(ram(info.bss_start, info.bss_end), 0);
+    if (!info.xip) {
+        @memcpy(ram(abi.cart_ram_origin, abi.cart_ram_origin + @as(u32, @intCast(slot.bytes.len))), slot.bytes);
+        @memset(ram(info.bss_start, info.bss_end), 0);
+    }
 
     maps = scaler.Maps.init(slot.scale);
     // Black the panel first: a native-scale cart never draws the border,
@@ -160,6 +220,8 @@ fn start_cart(index: u8) void {
     ipc.battery_level = battery_level_constant;
 
     @as(*volatile u32, &cart_entry).* = info.entry_point;
+    @as(*volatile u32, &cart_sp).* = info.initial_sp;
+    @as(*volatile u32, &cart_vtor).* = info.vector_table;
     asm volatile ("dsb" ::: .{ .memory = true });
 
     // Resets core 1 again, drains the FIFO, runs core1_main on core 1.
@@ -167,8 +229,10 @@ fn start_cart(index: u8) void {
 }
 
 /// Runs on core 1 (microzig's launch wrapper has enabled the FPU). Prepares
-/// the core like the SYCL OS's executeCart for a RAM cart, then jumps to
-/// the cart with MSP at the top of cart RAM. Never returns.
+/// the core like the SYCL OS's executeCart, then jumps to the cart with MSP
+/// at the top of cart RAM (a RAM cart's 0x20080000, an XIP cart's vector
+/// table SP, which is also 0x20080000). For an XIP cart VTOR points at its
+/// vector table, as the SYCL OS sets it. Never returns.
 fn core1_main() void {
     asm volatile ("cpsid i");
 
@@ -195,7 +259,11 @@ fn core1_main() void {
     FPCCR.* = FPCCR.* | (1 << 31) | (1 << 30);
     @as(*volatile u32, @ptrFromInt(0xE000ED88)).* = 0xFFFF_FFFF; // CPACR
 
+    const vtor = @as(*volatile u32, &cart_vtor).*;
+    if (vtor != 0) @as(*volatile u32, @ptrFromInt(0xE000ED08)).* = vtor; // SCB VTOR
+
     const entry = @as(*volatile u32, &cart_entry).*;
+    const sp = @as(*volatile u32, &cart_sp).*;
     asm volatile (
         \\  dsb
         \\  isb
@@ -204,7 +272,7 @@ fn core1_main() void {
         \\  isb
         \\  bx %[entry]
         :
-        : [sp] "r" (abi.cart_initial_sp),
+        : [sp] "r" (sp),
           [entry] "r" (entry),
         : .{ .memory = true });
     unreachable;
@@ -343,7 +411,11 @@ fn fail_color(err: cart_image.Error) u16 {
         error.ImageTooLarge => 0x00F8, // red (big-endian RGB565)
         error.NoDescriptor => 0xE0FF, // yellow
         error.BadVersion => 0x1FF8, // magenta
-        error.BadBss, error.BadEntry => 0x1F00, // blue
+        error.BadBss, error.BadEntry, error.BadStack => 0x1F00, // blue
+        // XIP builds: the cart window (0x101C0000) is empty or not this
+        // build's image; the drive (0x10080000) is not this build's.
+        error.NoXipImage, error.XipMismatch => 0xFF07, // cyan
+        error.DriveMismatch => 0x20FD, // orange
     };
 }
 
@@ -375,7 +447,7 @@ fn draw_menu() void {
 }
 
 /// Validated image of every cart (null: unusable, never launched).
-var infos: [cart_count]?cart_image.Info = @splat(null);
+var infos: [cart_count]?Launch = @splat(null);
 var session: arcade.Session = undefined;
 
 fn exec(cmd: arcade.Command) void {
@@ -399,7 +471,7 @@ pub noinline fn main() void {
 
     var playable: u32 = 0;
     for (&slots, &infos, 0..) |*slot, *info, i| {
-        if (cart_image.validate(slot.bytes, abi.cart_ram_origin)) |ok| {
+        if (validate_slot(slot)) |ok| {
             info.* = ok;
             playable |= @as(u32, 1) << @intCast(i);
         } else |err| {

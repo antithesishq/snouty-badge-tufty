@@ -5,13 +5,21 @@
 //!   zig build -Dscale=crop        cart scale mode: fit, crop, native (default per
 //!                                 cart: fit for snouty-run, crop for demosnout)
 //!   zig build test                host unit tests
+//!   zig build -Dcart=snouty-genesis -Dgenesis_rom=/abs/path/rom.bin
+//!                                 the Genesis emulator (an XIP cart) with that
+//!                                 ROM on a FAT12 drive image in the same UF2
+//!                                 (default ROM: the cart's open Miniplanets;
+//!                                 docs/ports/snouty-genesis.md)
 //!
 //! Firmware outputs (ELF + UF2, family RP2350_ARM_S, all below 0x10200000):
 //!   snouty-tufty-hello       M0 bring-up test screen, clk_sys 250 MHz
 //!   snouty-tufty-hello-150   the same at 150 MHz (fallback for the clock path)
 //!   snouty-tufty-<cart>      M1 Tufty OS running one SYCL RAM cart, 250 MHz
-//!   snouty-tufty-arcade      M2 every cart in `carts` behind a boot menu
+//!   snouty-tufty-arcade      M2 every RAM cart in `carts` behind a boot menu
 //!                            (docs/ARCADE.md)
+//!   snouty-tufty-genesis     the Tufty OS + the genesis XIP cart at
+//!                            0x101C0000 + a FAT12 drive holding the ROM at
+//!                            0x10080000, in one UF2 (`xip` carts, below)
 //!
 //!   zig build menu-png            render the arcade menu to docs/arcade-menu.png
 //!
@@ -46,6 +54,16 @@ const MicroBuild = microzig.MicroBuild(.{
 /// `reflections_variant`: the monorepo's -Dreflections_variant for that cart
 /// (null: the option is not passed). `maze_size`: the monorepo's
 /// -Dmaze_size for snouty-maze (null: its default, 12).
+/// `xip`: an execute-in-place cart (the monorepo's -Dcart-mode=xip), linked
+/// to the SYCL cart flash window 0x101C0000..0x10200000. The OS embeds no
+/// image for it; the UF2 carries the image at that address (tools/uf2_pack),
+/// and the OS validates and launches it from there. One window, so at most
+/// one XIP cart per firmware; the arcade may hold one beside its RAM carts.
+/// `arcade`: false keeps a row out of the arcade (single-cart build only).
+/// `uf2`: the single-cart UF2 is snouty-tufty-<uf2> (default: the name).
+/// `rom_drive`: the UF2 also carries a FAT12 drive at 0x10080000 (the SYCL
+/// romfs) holding -Dgenesis_rom, which the cart reads in place. It overlaps
+/// the arcade's RAM carts, so such a cart is single-cart only.
 const Cart = struct {
     name: []const u8,
     binary: []const u8,
@@ -53,6 +71,10 @@ const Cart = struct {
     title: ?[]const u8 = null,
     reflections_variant: ?[]const u8 = null,
     maze_size: ?u8 = null,
+    xip: bool = false,
+    arcade: bool = true,
+    uf2: ?[]const u8 = null,
+    rom_drive: bool = false,
 };
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
@@ -68,6 +90,11 @@ const carts = [_]Cart{
     // Fit: the verb caption is at y 119..127, which crop would cut. The
     // cart's own 30 fps lock and options (docs/ports/snouty-flyover.md).
     .{ .name = "snouty-flyover", .binary = "snouty-flyover" },
+    // XIP with its ROM on a FAT12 drive: its own UF2 only,
+    // snouty-tufty-genesis.uf2 (docs/ports/snouty-genesis.md). Fit keeps all
+    // 128 rows: the cart's menu footer, scrub bar and hint strip sit on its
+    // bottom rows, which crop cuts.
+    .{ .name = "snouty-genesis", .binary = "snouty-genesis", .xip = true, .arcade = false, .uf2 = "genesis", .rom_drive = true },
 };
 
 const Scale = enum { fit, crop, native };
@@ -89,9 +116,26 @@ const blurbs = [_][2][]const u8{
 /// linker's 2 MB flash region still stops anything at 0x10200000 or above.
 const flash_limit: u32 = 0x101C0000;
 
+/// The SYCL flash layout an XIP cart is linked for (sycl-badge
+/// src/os/linker.ld and src/cart/cart_xip.ld at a6ce19f, snouty-badge
+/// lib/romfs.zig): the romfs (FAT12 drive) region, then the 256 KB cart
+/// window. An XIP build ends at xip_window_end, where the badge's own ROMFS
+/// starts.
+const romfs_base: u32 = 0x10080000;
+const xip_window: u32 = 0x101C0000;
+const xip_window_end: u32 = 0x10200000;
+
+/// The default -Dgenesis_rom: Sik's Miniplanets (zlib licence), shipped with
+/// the cart (snouty-badge/carts/snouty-genesis/roms/LICENSE-miniplanets).
+const default_genesis_rom = "snouty-badge/carts/snouty-genesis/roms/miniplanets.bin";
+
 pub fn build(b: *Build) void {
     const cart_name = b.option([]const u8, "cart", "Cart for the Tufty OS image (default snouty-run)") orelse "snouty-run";
     const scale_option = b.option(Scale, "scale", "Cart scale mode: fit (128->240 rows), crop (2x, drop 4 rows top and bottom), native (1:1 centred). Default: per cart (fit unless the carts table says otherwise)");
+    // A path only: absolute, or relative to this repository. No `~`
+    // expansion and no existence probe (the configure-cache rule above); a
+    // missing file fails the build when the drive image is written.
+    const genesis_rom = b.option([]const u8, "genesis_rom", "snouty-genesis: the Genesis ROM for the UF2's FAT12 drive (absolute, or relative to this repository; default " ++ default_genesis_rom ++ ", zlib). Never commit a commercial ROM") orelse default_genesis_rom;
 
     const mz_dep = b.dependency("microzig", .{});
     const mb = MicroBuild.init(b, mz_dep) orelse return;
@@ -109,10 +153,10 @@ pub fn build(b: *Build) void {
     const cart = for (carts) |c| {
         if (std.mem.eql(u8, c.name, cart_name)) break c;
     } else std.debug.panic("-Dcart: unknown cart '{s}' (see the carts table in build.zig)", .{cart_name});
-    add_cart_host(b, mb, tufty_target, cart, scale_option orelse cart.scale);
+    add_cart_host(b, mb, tufty_target, cart, scale_option orelse cart.scale, genesis_rom);
 
-    // M2: every cart of the table behind the boot menu, each at its table scale.
-    add_arcade(b, mb, tufty_target);
+    // M2: every arcade cart of the table behind the boot menu, each at its table scale.
+    add_arcade(b, mb, tufty_target, genesis_rom);
 
     const iris_mod = b.createModule(.{
         .root_source_file = b.path("snouty-badge/lib/iris_mark.zig"),
@@ -133,7 +177,7 @@ pub fn build(b: *Build) void {
                         .{ .name = "iris_mark", .module = iris_mod },
                     },
                 }) },
-                .{ .name = "cart_meta", .module = cart_meta(b, &carts).createModule() },
+                .{ .name = "cart_meta", .module = cart_meta(b, arcade_carts(b)).createModule() },
             },
         }),
     });
@@ -151,6 +195,9 @@ pub fn build(b: *Build) void {
             .imports = &.{
                 .{ .name = "font", .module = font_mod },
                 .{ .name = "iris_mark", .module = iris_mod },
+                // The cart's own FAT12 reader: the drive image tests read
+                // their images back through it.
+                .{ .name = "romfs", .module = b.createModule(.{ .root_source_file = b.path("snouty-badge/lib/romfs.zig") }) },
             },
         }),
     });
@@ -192,44 +239,101 @@ fn add_hello(
 fn cart_bin(b: *Build, cart: Cart, inspect: bool) Build.LazyPath {
     // -Dbadge=tufty (every cart): Tufty button names in the carts' on-screen
     // text and a clock-seeded snouty-maze (snouty-badge `tufty` branch,
-    // docs/CARTS.md). Carts without such text ignore it.
+    // docs/CARTS.md). Carts without such text ignore it. An XIP cart is
+    // built with -Dcart-mode=xip, and its ELF is <binary>-xip.elf.
+    const mode: []const u8 = if (cart.xip) "xip" else "ram";
     const badge = if (cart.reflections_variant) |v|
-        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .reflections_variant = v })
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .@"cart-mode" = mode, .reflections_variant = v })
     else if (cart.maze_size) |n|
-        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .maze_size = n })
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .@"cart-mode" = mode, .maze_size = n })
     else
-        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty" });
-    const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
-    const bin = b.addObjCopy(elf, .{ .basename = b.fmt("{s}.bin", .{cart.binary}), .format = .binary }).getOutput();
+        b.dependency("snouty_badge", .{ .cart = cart.name, .badge = "tufty", .@"cart-mode" = mode });
+    const stem = if (cart.xip) b.fmt("{s}-xip", .{cart.binary}) else cart.binary;
+    const elf = installed_file(badge.builder, b.fmt("{s}.elf", .{stem}));
+    // RAM: from 0x20035100 to the end of .data. XIP: from the cart window
+    // 0x101C0000 (vector table first) to the end of .data's flash copy.
+    const bin = b.addObjCopy(elf, .{ .basename = b.fmt("{s}.bin", .{stem}), .format = .binary }).getOutput();
     if (inspect) {
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(elf, .{ .custom = "firmware/cart" }, b.fmt("{s}.elf", .{cart.binary})).step);
-        b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "firmware/cart" }, b.fmt("{s}.bin", .{cart.binary})).step);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(elf, .{ .custom = "firmware/cart" }, b.fmt("{s}.elf", .{stem})).step);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(bin, .{ .custom = "firmware/cart" }, b.fmt("{s}.bin", .{stem})).step);
     }
     return bin;
 }
 
-/// M1: the Tufty OS with one cart embedded, booted straight away.
-fn add_cart_host(b: *Build, mb: *MicroBuild, target: *microzig.Target, cart: Cart, scale: Scale) void {
-    var single = cart;
-    single.scale = scale;
-    add_os(b, mb, target, b.fmt("snouty-tufty-{s}", .{cart.name}), &.{single}, &.{cart_bin(b, cart, false)}, false);
+/// What a cart puts in the UF2: its image (RAM: embedded in the OS; XIP:
+/// packed at xip_window) and, for a `rom_drive` cart, the FAT12 drive (packed
+/// at romfs_base) and the ROM file on it.
+const CartParts = struct {
+    image: Build.LazyPath,
+    drive: ?Build.LazyPath = null,
+    rom: ?Build.LazyPath = null,
+};
+
+fn cart_parts(b: *Build, cart: Cart, inspect: bool, rom_path: []const u8) CartParts {
+    const image = cart_bin(b, cart, inspect);
+    if (!cart.rom_drive) return .{ .image = image };
+
+    const rom: Build.LazyPath = if (std.fs.path.isAbsolute(rom_path)) .{ .cwd_relative = rom_path } else b.path(rom_path);
+    const make_drive = b.addRunArtifact(host_tool(b, "drive_image", &.{.{ .name = "fat12_image", .path = "src/fat12_image.zig" }}));
+    const drive = make_drive.addOutputFileArg(b.fmt("{s}-drive.img", .{cart.binary}));
+    make_drive.addFileArg(rom);
+    // The file name on the drive comes from the option's basename (a string
+    // operation, not a file probe): sonic1.bin -> SONIC1.BIN.
+    make_drive.addArg(std.fs.path.basename(rom_path));
+    const drive_report = make_drive.captureStdOut(.{});
+    const dir: Build.InstallDir = .{ .custom = "firmware/cart" };
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(drive, dir, b.fmt("{s}-drive.img", .{cart.binary})).step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(drive_report, dir, b.fmt("{s}-drive.txt", .{cart.binary})).step);
+    return .{ .image = image, .drive = drive, .rom = rom };
 }
 
-/// M2: the Tufty OS with every cart of `carts` embedded, behind the menu.
-fn add_arcade(b: *Build, mb: *MicroBuild, target: *microzig.Target) void {
-    var bins: [carts.len]Build.LazyPath = undefined;
-    for (carts, &bins) |c, *bin| bin.* = cart_bin(b, c, true);
-    add_os(b, mb, target, "snouty-tufty-arcade", &carts, &bins, true);
+/// M1: the Tufty OS with one cart, booted straight away. A RAM cart is
+/// embedded; an XIP cart (snouty-genesis) is packed into the UF2 at the cart
+/// window, with its drive if it has one, and runs exactly as on the SYCL
+/// badge: code from the window, the ROM read in place from the drive.
+fn add_cart_host(b: *Build, mb: *MicroBuild, target: *microzig.Target, cart: Cart, scale: Scale, rom_path: []const u8) void {
+    var single = cart;
+    single.scale = scale;
+    // An XIP cart's ELF and image are installed under firmware/cart/ (the
+    // arcade does it for its own rows).
+    add_os(b, mb, target, b.fmt("snouty-tufty-{s}", .{cart.uf2 orelse cart.name}), &.{single}, &.{cart_parts(b, cart, cart.xip and !cart.arcade, rom_path)}, false);
+}
+
+/// The rows of `carts` the arcade holds (`arcade = true`): the RAM carts and
+/// at most one XIP cart. A `rom_drive` cart cannot be one: its drive at
+/// 0x10080000 would overlap the RAM carts.
+fn arcade_carts(b: *Build) []const Cart {
+    var list: std.ArrayList(Cart) = .empty;
+    var xips: u32 = 0;
+    for (carts) |c| {
+        if (!c.arcade) continue;
+        if (c.rom_drive) std.debug.panic("{s}: a rom_drive cart cannot be in the arcade (set .arcade = false)", .{c.name});
+        if (c.xip) xips += 1;
+        list.append(b.allocator, c) catch @panic("OOM");
+    }
+    if (xips > 1) std.debug.panic("the arcade holds at most one XIP cart (one cart window)", .{});
+    return list.items;
+}
+
+/// M2: the Tufty OS with every arcade cart of `carts`, behind the menu.
+fn add_arcade(b: *Build, mb: *MicroBuild, target: *microzig.Target, rom_path: []const u8) void {
+    const list = arcade_carts(b);
+    const parts = b.allocator.alloc(CartParts, list.len) catch @panic("OOM");
+    for (list, parts) |c, *p| p.* = cart_parts(b, c, true, rom_path);
+    add_os(b, mb, target, "snouty-tufty-arcade", list, parts, true);
 }
 
 /// The menu facts of `list` as a module (`cart_meta`): parallel arrays
-/// `names`, `titles`, `blurbs` ("" = none) and `scales` (fit/crop/native).
+/// `names`, `titles`, `blurbs` ("" = none), `scales` (fit/crop/native) and
+/// `xips` (true: an XIP cart, run from the flash window).
 fn cart_meta(b: *Build, list: []const Cart) *Build.Step.Options {
     const names = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
     const titles = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
     const blurb_list = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
     const scales = b.allocator.alloc([]const u8, list.len) catch @panic("OOM");
+    const xips = b.allocator.alloc(bool, list.len) catch @panic("OOM");
     for (list, 0..) |c, i| {
+        xips[i] = c.xip;
         names[i] = c.name;
         titles[i] = c.title orelse default_title(b, c.name);
         blurb_list[i] = for (blurbs) |bl| {
@@ -243,6 +347,7 @@ fn cart_meta(b: *Build, list: []const Cart) *Build.Step.Options {
     meta.addOption([]const []const u8, "titles", titles);
     meta.addOption([]const []const u8, "blurbs", blurb_list);
     meta.addOption([]const []const u8, "scales", scales);
+    meta.addOption([]const bool, "xips", xips);
     return meta;
 }
 
@@ -274,24 +379,55 @@ fn flash_check(b: *Build) *Build.Step.Compile {
     return flash_check_exe.?;
 }
 
-/// The Tufty OS with the carts `list` embedded (`list_bins`: their images,
+/// The Tufty OS with the carts `list` (`parts`: their images and drives,
 /// same order). `arcade`: boot into the menu, HOME returns to it. Otherwise
 /// boot the first (only) cart, HOME restarts it.
+///
+/// RAM carts are embedded in the OS. An XIP cart (at most one) is not: its
+/// slot gets an empty image, and tools/uf2_pack.zig adds its image at the
+/// cart window, plus a `rom_drive` cart's drive at romfs_base, to the OS's
+/// UF2 (the OS firmware is then built as `<name>-os`, and the packed UF2 is
+/// `<name>.uf2`). The OS learns the packed regions' lengths and CRC32s from
+/// the generated `xip_meta` module and checks them at boot.
 fn add_os(
     b: *Build,
     mb: *MicroBuild,
     target: *microzig.Target,
     name: []const u8,
     list: []const Cart,
-    list_bins: []const Build.LazyPath,
+    parts: []const CartParts,
     arcade: bool,
 ) void {
+    // The regions the UF2 packs besides the OS.
+    var xip_image: ?Build.LazyPath = null;
+    var xip_name: []const u8 = "";
+    var drive: ?Build.LazyPath = null;
+    var rom: ?Build.LazyPath = null;
+    for (list, parts) |c, p| {
+        if (c.xip) {
+            if (xip_image != null) std.debug.panic("{s}: at most one XIP cart per firmware (one cart window)", .{name});
+            xip_image = p.image;
+            xip_name = c.name;
+        }
+        if (p.drive) |d| {
+            if (!c.xip) std.debug.panic("{s}: rom_drive is for XIP carts", .{c.name});
+            drive = d;
+            rom = p.rom;
+        }
+    }
+    const packs = xip_image != null;
+
     // `cart_images`: the embedded images by index, so file names stay plain.
     const image_files = b.addWriteFiles();
     var src: std.ArrayList(u8) = .empty;
     src.appendSlice(b.allocator, "//! Generated by build.zig: the embedded cart images, in `carts` order.\npub const images = [_][]const u8{\n") catch @panic("OOM");
-    for (list_bins, 0..) |bin, i| {
-        _ = image_files.addCopyFile(bin, b.fmt("cart{d}.bin", .{i}));
+    for (list, parts, 0..) |c, p, i| {
+        // An XIP cart's image is in the flash window, not in the OS.
+        if (c.xip) {
+            _ = image_files.add(b.fmt("cart{d}.bin", .{i}), "");
+        } else {
+            _ = image_files.addCopyFile(p.image, b.fmt("cart{d}.bin", .{i}));
+        }
         src.appendSlice(b.allocator, b.fmt("    @embedFile(\"cart{d}.bin\"),\n", .{i})) catch @panic("OOM");
     }
     src.appendSlice(b.allocator, "};\n") catch @panic("OOM");
@@ -301,8 +437,31 @@ fn add_os(
     options.addOption(u32, "sys_mhz", 250);
     options.addOption(bool, "arcade", arcade);
 
+    // `xip_meta`: what the UF2 puts in the cart window and the drive region
+    // (lengths and CRC32s, tools/xip_meta.zig), or `present = false`.
+    const xip_meta_src: Build.LazyPath = if (xip_image) |image| blk: {
+        const run = b.addRunArtifact(host_tool(b, "xip_meta", &.{}));
+        run.addArg(b.fmt("0x{X:0>8}", .{xip_window}));
+        run.addFileArg(image);
+        if (drive) |d| {
+            run.addArg(b.fmt("0x{X:0>8}", .{romfs_base}));
+            run.addFileArg(d);
+        }
+        break :blk run.captureStdOut(.{ .basename = "xip_meta.zig" });
+    } else b.addWriteFiles().add("xip_meta.zig",
+        \\//! Generated by build.zig: this firmware has no XIP cart.
+        \\pub const present = false;
+        \\pub const image_addr: u32 = 0;
+        \\pub const image_len: u32 = 0;
+        \\pub const image_crc: u32 = 0;
+        \\pub const drive_addr: u32 = 0;
+        \\pub const drive_len: u32 = 0;
+        \\pub const drive_crc: u32 = 0;
+        \\
+    );
+
     const fw = mb.add_firmware(.{
-        .name = name,
+        .name = if (packs) b.fmt("{s}-os", .{name}) else name,
         .target = target,
         .optimize = .ReleaseSmall,
         .root_source_file = b.path("src/cart_host.zig"),
@@ -310,25 +469,74 @@ fn add_os(
             .{ .name = "build_options", .module = options.createModule() },
             .{ .name = "cart_meta", .module = cart_meta(b, list).createModule() },
             .{ .name = "cart_images", .module = b.createModule(.{ .root_source_file = images_src }) },
+            .{ .name = "xip_meta", .module = b.createModule(.{ .root_source_file = xip_meta_src }) },
             .{ .name = "font", .module = b.createModule(.{ .root_source_file = b.path("snouty-badge/sycl-badge/src/font.zig") }) },
             .{ .name = "iris_mark", .module = b.createModule(.{ .root_source_file = b.path("snouty-badge/lib/iris_mark.zig") }) },
         },
     });
-    install(mb, fw);
+    const os_uf2 = fw.get_emitted_bin(.{ .uf2 = .{ .family_id = .RP2350_ARM_S } });
+
+    // The UF2 to flash: the OS's own, or with an XIP cart the OS's plus the
+    // cart window (and the drive) (tools/uf2_pack.zig: one block sequence,
+    // renumbered, overlaps refused).
+    const uf2 = if (xip_image) |image| blk: {
+        mb.install_firmware(fw, .{ .format = .elf });
+        const pack = b.addRunArtifact(host_tool(b, "uf2_pack", &.{.{ .name = "uf2_pack", .path = "src/uf2_pack.zig" }}));
+        const out = pack.addOutputFileArg(b.fmt("{s}.uf2", .{name}));
+        pack.addFileArg(os_uf2);
+        if (drive) |d| {
+            pack.addArg(b.fmt("0x{X:0>8}", .{romfs_base}));
+            pack.addFileArg(d);
+        }
+        pack.addArg(b.fmt("0x{X:0>8}", .{xip_window}));
+        pack.addFileArg(image);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(out, .{ .custom = "firmware" }, b.fmt("{s}.uf2", .{name})).step);
+        break :blk out;
+    } else blk: {
+        install(mb, fw);
+        break :blk os_uf2;
+    };
 
     // Flash budget: fails the build with a clear message if the UF2 reaches
-    // flash_limit, and writes <name>.flash.txt next to it (range, budget
-    // used, the address of every embedded cart image in the UF2).
+    // its limit (flash_limit; with an XIP cart 0x10200000, and then
+    // everything outside the cart window must still end below flash_limit),
+    // and writes <name>.flash.txt next to it (range, budget used, the address
+    // of every image in the UF2; the XIP image and the drive are required at
+    // their addresses).
     const check = b.addRunArtifact(flash_check(b));
     check.addArg(name);
-    check.addFileArg(fw.get_emitted_bin(.{ .uf2 = .{ .family_id = .RP2350_ARM_S } }));
-    check.addArg(b.fmt("0x{X:0>8}", .{flash_limit}));
-    for (list, list_bins) |c, bin| {
+    check.addFileArg(uf2);
+    check.addArg(b.fmt("0x{X:0>8}", .{if (packs) xip_window_end else flash_limit}));
+    for (list, parts) |c, p| {
+        if (c.xip) continue;
         check.addArg(c.name);
-        check.addFileArg(bin);
+        check.addFileArg(p.image);
+    }
+    if (drive) |d| {
+        check.addArg(b.fmt("drive@0x{X:0>8}", .{romfs_base}));
+        check.addFileArg(d);
+        check.addArg("rom");
+        check.addFileArg(rom.?);
+    }
+    if (xip_image) |image| {
+        check.addArg(b.fmt("{s}@0x{X:0>8}", .{ xip_name, xip_window }));
+        check.addFileArg(image);
     }
     const report = check.captureStdOut(.{});
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(report, .{ .custom = "firmware" }, b.fmt("{s}.flash.txt", .{name})).step);
+}
+
+const ToolImport = struct { name: []const u8, path: []const u8 };
+
+/// A host tool tools/<name>.zig with the given src/ modules imported.
+fn host_tool(b: *Build, name: []const u8, imports: []const ToolImport) *Build.Step.Compile {
+    const mod = b.createModule(.{
+        .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    for (imports) |imp| mod.addImport(imp.name, b.createModule(.{ .root_source_file = b.path(imp.path) }));
+    return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
 /// The source of a file a dependency's build installs under

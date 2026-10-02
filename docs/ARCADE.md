@@ -117,8 +117,24 @@ section).
 | Range | Use |
 |---|---|
 | 0x10000000..0x101C0000 (1792 KB) | the firmware: Tufty OS, menu, and every cart image (the budget) |
-| 0x101C0000..0x10200000 (256 KB) | reserved for a future XIP cart. Nothing of ours goes here |
+| 0x101C0000..0x10200000 (256 KB) | the XIP cart window: empty, or the one XIP cart (below) |
 | 0x10200000.. | the badge's ROMFS and FAT drive. Never touched |
+
+### One XIP cart in the arcade
+
+A row with `.xip = true` is an execute-in-place cart (the monorepo's
+`-Dcart-mode=xip`, linked to 0x101C0000 by the SDK's `cart_xip.ld`). The OS
+embeds no image for it: tools/uf2_pack.zig adds its image to the UF2 at
+0x101C0000, and flash_check requires it there byte for byte, with every
+other block still below 0x101C0000. At boot the OS checks the window's
+vector table (SP in cart RAM, Thumb reset handler in the window, as the
+SYCL OS's executeCart) and its CRC32 against the build's (`xip_meta`); a
+bad window dims the row. A launch zeroes cart RAM and starts core 1 at the
+reset handler with the vector table's SP and VTOR. HOME stops it like any
+cart. At most one XIP row per firmware (one window); `.arcade = false`
+keeps a row out of the arcade, and `.rom_drive` (snouty-genesis' FAT12
+drive at 0x10080000, which overlaps the RAM carts) is single-cart only.
+See [ports/snouty-genesis.md](ports/snouty-genesis.md).
 
 The build enforces this. After each cart-host firmware build,
 `tools/flash_check.zig` checks the UF2:

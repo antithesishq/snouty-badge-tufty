@@ -396,6 +396,31 @@ pub const snouty_flyover: Map = .{
     },
 };
 
+/// snouty-genesis (docs/ports/snouty-genesis.md): the cart turns SYCL
+/// controls into a Genesis pad (cart input.zig, default layout): d-pad,
+/// badge A = Genesis C, badge B = Genesis B, Start = Start, a Select tap =
+/// Genesis A, Select held 500 ms = the emulator menu. Split d-pad: A/B =
+/// left/right, UP/DOWN = up/down, C = badge A (Genesis C, jump). A+B =
+/// badge B (Genesis B, also jump in Sonic): the left thumb's jump while the
+/// right thumb holds DOWN (crouch + jump, Sonic 2's spin dash), and the
+/// menu's "back / resume". UP+DOWN tap = Start (pause, title screens);
+/// held 300 ms = Select, held until release, so the cart's own 500 ms hold
+/// opens its menu (0.8 s in all; released in between = a Select tap =
+/// Genesis A). chord_ms 0: a chord leaks its first member for 2 presents
+/// (a one-frame step in play; in the cart menu A+B can scrub back 0.5 s
+/// before it resumes).
+pub const snouty_genesis: Map = .{
+    .bindings = &.{
+        .{ .on = btn(.a), .held = bit(.left) },
+        .{ .on = btn(.b), .held = bit(.right) },
+        .{ .on = btn(.c), .held = bit(.a) },
+        .{ .on = btn(.up), .held = bit(.up) },
+        .{ .on = btn(.down), .held = bit(.down) },
+        .{ .on = btn(.a) | btn(.b), .held = bit(.b) },
+        .{ .on = btn(.up) | btn(.down), .tap = bit(.start), .hold = bit(.select), .tap_ms = 250, .hold_ms = 300 },
+    },
+};
+
 /// The map for a cart, by its -Dcart name.
 pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snouty-flyover")) return &snouty_flyover;
@@ -405,7 +430,130 @@ pub fn for_cart(comptime name: []const u8) *const Map {
     if (std.mem.eql(u8, name, "snoutenstein")) return &snoutenstein;
     if (std.mem.eql(u8, name, "snouty-reflections")) return &snouty_reflections;
     if (std.mem.eql(u8, name, "snouty-maze")) return &snouty_maze;
+    if (std.mem.eql(u8, name, "snouty-genesis")) return &snouty_genesis;
     return &default;
+}
+
+// ---- snouty-genesis (self-contained; the cart samples once per 30 Hz update) ----
+
+/// Steps a mapper like the genesis cart: one present per 33 ms update, with
+/// several OS loops in between.
+const GenSim = struct {
+    m: Mapper = .init(&snouty_genesis),
+    t: u64 = 0,
+    presents: u32 = 0,
+
+    /// Holds `held` for `dur_ms`, one OS loop per ms, a present every 33 ms;
+    /// returns the OR of everything the cart saw at its presents.
+    fn hold(s: *GenSim, held: u8, dur_ms: u64) u16 {
+        var seen: u16 = 0;
+        var i: u64 = 0;
+        while (i < dur_ms) : (i += 1) {
+            s.t += 1000;
+            const out = s.m.update(held, s.t, s.presents);
+            if (s.t % 33_000 < 1000) {
+                s.presents += 1;
+                seen |= out;
+            }
+        }
+        return seen;
+    }
+
+    /// What the cart sees at its next present with `held`.
+    fn sample(s: *GenSim, held: u8) u16 {
+        var out: u16 = 0;
+        while (true) {
+            s.t += 1000;
+            out = s.m.update(held, s.t, s.presents);
+            if (s.t % 33_000 < 1000) {
+                s.presents += 1;
+                return out;
+            }
+        }
+    }
+};
+
+test "genesis: for_cart picks its map; one control per button" {
+    try testing.expectEqual(&snouty_genesis, for_cart("snouty-genesis"));
+    const cases = [_]struct { b: Button, c: Control }{
+        .{ .b = .a, .c = .left },
+        .{ .b = .b, .c = .right },
+        .{ .b = .c, .c = .a },
+        .{ .b = .up, .c = .up },
+        .{ .b = .down, .c = .down },
+    };
+    for (cases) |cs| {
+        var s: GenSim = .{};
+        try testing.expectEqual(bit(cs.c), s.sample(btn(cs.b)));
+        try testing.expectEqual(bit(cs.c), s.hold(btn(cs.b), 500));
+    }
+}
+
+test "genesis: run and jump together, roll (direction + DOWN)" {
+    var s: GenSim = .{};
+    try testing.expectEqual(bit(.right) | bit(.a), s.sample(btn(.b) | btn(.c)));
+    try testing.expectEqual(bit(.right) | bit(.a), s.hold(btn(.b) | btn(.c), 300));
+    _ = s.hold(0, 100);
+    try testing.expectEqual(bit(.right) | bit(.down), s.sample(btn(.b) | btn(.down)));
+    _ = s.hold(0, 100);
+    try testing.expectEqual(bit(.left) | bit(.up), s.sample(btn(.a) | btn(.up)));
+}
+
+test "genesis: A+B is the cart's B, masking left/right; DOWN + A+B = crouch + jump" {
+    var s: GenSim = .{};
+    _ = s.hold(btn(.down), 100);
+    // The left thumb presses A and B together while DOWN is held.
+    _ = s.hold(btn(.down) | btn(.a) | btn(.b), 100);
+    try testing.expectEqual(bit(.down) | bit(.b), s.sample(btn(.down) | btn(.a) | btn(.b)));
+    try testing.expectEqual(bit(.down) | bit(.b), s.hold(btn(.down) | btn(.a) | btn(.b), 200));
+    // Release B: A stays masked until it too is released (no stray left).
+    _ = s.hold(btn(.down) | btn(.a), 100);
+    try testing.expectEqual(bit(.down), s.sample(btn(.down) | btn(.a)));
+    _ = s.hold(0, 100);
+    try testing.expectEqual(bit(.left), s.sample(btn(.a)));
+}
+
+test "genesis: UP+DOWN tap = one Start, never Select" {
+    var s: GenSim = .{};
+    _ = s.hold(0, 100);
+    var seen = s.hold(btn(.up) | btn(.down), 150);
+    seen |= s.hold(0, 200);
+    try testing.expect(seen & bit(.start) != 0);
+    try testing.expect(seen & bit(.select) == 0);
+    try testing.expect(seen & (bit(.a) | bit(.b) | bit(.left) | bit(.right)) == 0);
+    try testing.expectEqual(@as(u16, 0), s.sample(0));
+}
+
+test "genesis: UP+DOWN held = Select held until release (the cart menu), never Start" {
+    var s: GenSim = .{};
+    _ = s.hold(0, 100);
+    _ = s.hold(btn(.up) | btn(.down), 320);
+    // From 300 ms on: Select, held; up/down are masked by the chord.
+    try testing.expectEqual(bit(.select), s.sample(btn(.up) | btn(.down)));
+    // Held 600 ms more: the cart's 15 updates (500 ms) of Select pass.
+    var presents_with_select: u32 = 0;
+    var i: u32 = 0;
+    while (i < 18) : (i += 1) {
+        const out = s.sample(btn(.up) | btn(.down));
+        try testing.expect(out & bit(.start) == 0);
+        if (out & bit(.select) != 0) presents_with_select += 1;
+    }
+    try testing.expectEqual(@as(u32, 18), presents_with_select);
+    // Released: Select drops (after its stretch), no Start.
+    _ = s.hold(0, 100);
+    try testing.expectEqual(@as(u16, 0), s.sample(0));
+}
+
+test "genesis: never click, and Start/Select only from UP+DOWN" {
+    // Every combination of the five buttons held for a while.
+    var held: u8 = 0;
+    while (held < 32) : (held += 1) {
+        var s: GenSim = .{};
+        const seen = s.hold(held, 1000);
+        try testing.expect(seen & bit(.click) == 0);
+        const ud = btn(.up) | btn(.down);
+        if (held & ud != ud) try testing.expect(seen & (bit(.start) | bit(.select)) == 0);
+    }
 }
 
 // ========================================

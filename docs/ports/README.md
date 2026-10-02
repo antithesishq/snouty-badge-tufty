@@ -11,6 +11,7 @@ separately.
 | [snoutenstein](snoutenstein.md) | 60 fps raycaster. 8 functions on 5 buttons: rewind on A+B, weapon/pause as tap/hold of UP+DOWN, double tap UP = autowalk latch. Fit; 5.7 ms worst becomes ~3.4 ms |
 | [snouty-maze](snouty-maze.md) | 60 fps screensaver with optional walking. No chords: C tap = skip, C hold = name strip. Fit; 11.4 ms worst becomes ~6.8 ms, so a 16x16 maze fits |
 | [demosnout](demosnout.md) | 60 fps demo. A/B/C/UP/DOWN map 1:1 onto a/b/select/up/down. Crop; 5.6 ms worst becomes ~3.3 ms. Largest `.bss` (174.5 KB) |
+| [snouty-genesis](snouty-genesis.md) | Genesis emulator, the first XIP cart: its own UF2 (`snouty-tufty-genesis.uf2`) with the cart at 0x101C0000 and a FAT12 drive holding the ROM (`-Dgenesis_rom`, Sonic 1) at 0x10080000; no cart change. A+B = B (left-thumb jump), UP+DOWN tap = Start, hold = the emulator menu. Fit; Miniplanets 29.1 ms worst at 150 MHz becomes ~17.5 ms vs 33.3, if XIP stalls hold |
 | [snouty-reflections](snouty-reflections.md) | Ray tracer. Ported with the `tufty20` variant (full15's full scene at 20 fps, on the submodule's `tufty` branch, docs/CARTS.md): 65.7 ms worst at 150 MHz on all four presets, ~39.4 ms at 250 vs 47. full20 is still over (~54 ms). Crop |
 
 ## Layout assumption: the split d-pad
