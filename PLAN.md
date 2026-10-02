@@ -82,6 +82,14 @@ needed for the first ports.
   each). Perf: the badge-bench numbers are at 150 MHz; at 250 MHz
   everything has about 1.6x headroom. Reflections can use the full scene
   variant instead of cut20.
+* **M2.g, the first XIP cart: snouty-genesis.** `snouty-tufty-snouty-genesis.uf2`
+  is the Tufty OS plus the unmodified genesis XIP cart at 0x101C0000 and a
+  FAT12 drive at 0x10080000 holding the ROM (`-Dgenesis_rom=`, default the
+  open Miniplanets; the owner's Sonic 1 rip stays outside the repo). The OS
+  checks both regions' CRC32s at boot and starts core 1 through the cart's
+  vector table, as the SYCL OS does. Single-cart only: the arcade already
+  reaches past 0x10080000. See [docs/ports/snouty-genesis.md](docs/ports/snouty-genesis.md).
+  Gate: Adrian flashes it and plays Green Hill Zone.
 * **M3, polish.** Per-cart scale mode, backlight from the light sensor,
   case LEDs, optional hi-res cart variants, and a MicroPython launcher
   stub, if one can chain-boot us.
