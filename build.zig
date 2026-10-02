@@ -2,7 +2,7 @@
 //!
 //!   zig build                     firmware into zig-out/firmware/
 //!   zig build -Dcart=snouty-run   pick the cart the Tufty OS embeds
-//!   zig build -Dscale=crop        cart scale mode: fit (default), crop, native
+//!   zig build -Dscale=crop        cart scale mode: fit, crop, native (default per cart)
 //!   zig build test                host unit tests
 //!
 //! Firmware outputs (ELF + UF2, family RP2350_ARM_S, all below 0x10200000):
@@ -12,7 +12,11 @@
 //!
 //! The cart is built, unmodified, by the snouty-badge submodule's own
 //! build.zig (a path dependency), exactly as for the SYCL badge; we take its
-//! ELF, objcopy the loadable bytes and embed them.
+//! ELF, objcopy the loadable bytes and embed them. The one exception is a
+//! cart's build option set here per cart: snouty-reflections is built as
+//! `-Dreflections_variant=tufty20` (full15's scene at 20 fps, which only
+//! fits at the Tufty's 250 MHz), not the SYCL badge's default cut20, so
+//! its Tufty image differs from the SYCL `dist/` one.
 //!
 //! Keep this file free of file-existence or environment branching: this Zig
 //! caches the configure-phase graph by build files + options only.
@@ -26,17 +30,35 @@ const MicroBuild = microzig.MicroBuild(.{
 });
 
 /// Carts the Tufty OS knows. `name` is the -Dcart name (the directory under
-/// snouty-badge/carts/), `binary` the firmware name its build installs.
-const Cart = struct { name: []const u8, binary: []const u8 };
+/// snouty-badge/carts/), `binary` the firmware name its build installs,
+/// `scale` the default scale mode (-Dscale overrides it), and
+/// `reflections_variant` the monorepo's -Dreflections_variant for that cart
+/// (null: the option is not passed).
+const Cart = struct {
+    name: []const u8,
+    binary: []const u8,
+    scale: Scale = .fit,
+    reflections_variant: ?[]const u8 = null,
+};
 const carts = [_]Cart{
     .{ .name = "snouty-run", .binary = "snouty" },
+    // Crop: an exact 2x keeps the dither cells regular and the spheres round
+    // (docs/ports/snouty-reflections.md).
+    .{ .name = "snouty-reflections", .binary = "snouty-reflections", .scale = .crop, .reflections_variant = "tufty20" },
 };
 
 const Scale = enum { fit, crop, native };
 
+/// "a, b, c" for the -Dcart help and error.
+const cart_names = blk: {
+    var s: []const u8 = "";
+    for (carts, 0..) |c, i| s = s ++ (if (i == 0) "" else ", ") ++ c.name;
+    break :blk s;
+};
+
 pub fn build(b: *Build) void {
-    const cart_name = b.option([]const u8, "cart", "Cart for the Tufty OS image (default snouty-run)") orelse "snouty-run";
-    const scale = b.option(Scale, "scale", "Cart scale mode: fit (128->240 rows, default), crop (2x, drop 4 rows top and bottom), native (1:1 centred)") orelse .fit;
+    const cart_name = b.option([]const u8, "cart", "Cart for the Tufty OS image (default snouty-run): " ++ cart_names) orelse "snouty-run";
+    const scale_opt = b.option(Scale, "scale", "Cart scale mode: fit (128->240 rows), crop (2x, drop 4 rows top and bottom), native (1:1 centred). Default per cart: crop for snouty-reflections, fit otherwise");
 
     const mz_dep = b.dependency("microzig", .{});
     const mb = MicroBuild.init(b, mz_dep) orelse return;
@@ -53,8 +75,8 @@ pub fn build(b: *Build) void {
 
     const cart = for (carts) |c| {
         if (std.mem.eql(u8, c.name, cart_name)) break c;
-    } else std.debug.panic("-Dcart: unknown cart '{s}' (known: snouty-run)", .{cart_name});
-    add_cart_host(b, mb, tufty_target, cart, scale);
+    } else std.debug.panic("-Dcart: unknown cart '{s}' (known: {s})", .{ cart_name, cart_names });
+    add_cart_host(b, mb, tufty_target, cart, scale_opt orelse cart.scale);
 
     // Host tests: the pure pixel / pattern / ABI code, no microzig.
     const unit_tests = b.addTest(.{
@@ -99,8 +121,12 @@ fn add_hello(
 
 /// The Tufty OS with one cart embedded.
 fn add_cart_host(b: *Build, mb: *MicroBuild, target: *microzig.Target, cart: Cart, scale: Scale) void {
-    // Configure the monorepo for just this cart, RAM mode, default options.
-    const badge = b.dependency("snouty_badge", .{ .cart = cart.name });
+    // Configure the monorepo for just this cart, RAM mode, default options
+    // except the cart's own variant, if it has one.
+    const badge = if (cart.reflections_variant) |v|
+        b.dependency("snouty_badge", .{ .cart = cart.name, .reflections_variant = v })
+    else
+        b.dependency("snouty_badge", .{ .cart = cart.name });
     const cart_elf = installed_file(badge.builder, b.fmt("{s}.elf", .{cart.binary}));
 
     // The cart's loadable bytes, from its link address 0x20035100 up to the
