@@ -15,6 +15,7 @@ changes. `snouty-badge` main is never modified from here.
 | 694888d | snouty-boy, snouty-gear, snouty-lynx: mark the full frame dirty after a scrub step (the scrub left the menu on screen on hardware) |
 | 26ada2c | cherry-pick of upstream main 7f4adfa (snoutenstein: more bugs in every level, two wasps in Build Farm; Build Farm 9 -> 13, Staging 15 -> 23, Production 22 -> 33, E1M1 20 -> 37; attract demo re-recorded); cart 100,380 -> 100,476 B, dual boot 665.6 of 704 KB |
 | a20a20e | cherry-pick of upstream main 7f7d6eb (snoutenstein: weapons and ammo carry between levels; keys, HP and the rewind meter stay per level, a level restart restores the loadout it was entered with); cart 100,476 -> 100,604 B, dual boot 665.7 of 704 KB |
+| ae3754f | cherry-pick of upstream main 4ab9e616 (snoutenstein: any button during the attract demo goes back to the title instead of handing over the demo's Production run); cart 100,604 -> 100,460 B, dual boot 665.6 of 704 KB |
 
 ## `-Dbadge=tufty`
 
