@@ -14,6 +14,7 @@ changes. `snouty-badge` main is never modified from here.
 | 7834448 | cherry-pick of upstream main 6276b90 (snoutenstein death-loop fix, tag `snoutenstein/m6.1`): leaving a rewind out of death alive gives 2 s of invulnerability and at least 25 HP, so a mob can no longer kill, rewind, kill forever; cart 100,124 -> 100,380 B, dual boot 664.8 of 704 KB |
 | 694888d | snouty-boy, snouty-gear, snouty-lynx: mark the full frame dirty after a scrub step (the scrub left the menu on screen on hardware) |
 | 26ada2c | cherry-pick of upstream main 7f4adfa (snoutenstein: more bugs in every level, two wasps in Build Farm; Build Farm 9 -> 13, Staging 15 -> 23, Production 22 -> 33, E1M1 20 -> 37; attract demo re-recorded); cart 100,380 -> 100,476 B, dual boot 665.6 of 704 KB |
+| a20a20e | cherry-pick of upstream main 7f7d6eb (snoutenstein: weapons and ammo carry between levels; keys, HP and the rewind meter stay per level, a level restart restores the loadout it was entered with); cart 100,476 -> 100,604 B, dual boot 665.7 of 704 KB |
 
 ## `-Dbadge=tufty`
 
